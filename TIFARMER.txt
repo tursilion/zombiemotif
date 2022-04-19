@@ -1,0 +1,96 @@
+======================================================
+TI Farm for TI Extended BASIC
+(copyright 2010 Howard Kistler/Dream Codex Retrogames)
+======================================================
+
+Place in the DSK1 folder of your Classic99 emulator,
+launch with Extended BASIC enabled, and load with the
+following commands:
+
+OLD "DSK1.TIFARMER"
+RUN
+
+The game file is named TIFARMER to distinguish it
+from the TI Farm project that's under discussion.
+Not that you'd mistake this for that anyway.
+
+------------------------------------------------------
+GAMEPLAY
+------------------------------------------------------
+
+You are Farmer McOwen, red-blooded homesteader in
+the America of 1900. You've set up a large farmhold
+and are working to bring in enough money to live
+a secure life. To do this you will need to work your
+land, an expanse of acreage which you can work one
+quad of each season. (The farm is very large, and
+you also follow the wise path of rotating your crops.)
+
+Each season you may do one of the following things:
+
+PLOW
+
+Break up the soil and plow under any remaining crop
+material from previous seasons. You will be asked 
+which quad you want to plow. Make sure you choose one
+with plenty of unbroken ground (dark brown and cracked
+looking earth).
+
+SEED
+
+Plant seeds in all the plowed ground of a quad. Plowed
+ground is light brown and has a regular wavy texture.
+Seeded ground will mature into harvestable crops at
+the end of each Spring.
+
+REAP
+
+Harvest any mature crops in a quad. Mature crops are
+dark green and leafy, while seedlings are light green
+and grass-like. You will receive $1 for every crop
+you harvest.
+
+HIRE
+
+Hire a farmhand to help around the place. This will
+cost you $250 each time, and you can hire up to four
+farmhands. They are displayed in red at the lower
+right, with the first person representing yourself.
+Each farmhand you hire reduces the impact of bad
+events and increases the benefits of good events.
+The farmhands available for hire are Katie Sue,
+Slim Buck, Fat Roy, and L'il Rex.
+
+QUIT
+
+Exit the game. You will get a summary of how much you
+earned by the time you quit. If you do not quit, the
+game will continue to the year 2000, at which point
+Farmer McOwen will have had enough and quit himself.
+
+------------------------------------------------------
+RANDOM EVENTS
+------------------------------------------------------
+
+Throughout the course of play random events will occur
+on the farm. Some will benefit you (like a new tractor
+that helps you break ground or windfall profits from
+growing a high-demand crop), others will set you back
+(insects may devour mature crops and a farmhand may
+be eaten by one of the many zombies that roamed the
+plains at this time). Hiring farmhands will help
+offset the losses of bad events and will boost the
+gains of good events, so keep a few handy.
+
+------------------------------------------------------
+CONTROLS
+------------------------------------------------------
+
+A = PLOW a quad
+B = SEED a quad
+C = REAP a quad
+D = HIRE a farmhand
+E = QUIT the game
+1-4 = Select the numbered quad for your action
+
+Enjoy!

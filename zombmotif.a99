@@ -1,0 +1,3031 @@
+* Zombie M.O.T.I.F.
+* Zombie McOwen's T I Farm
+* Ported from TI Farmer, and ZomBXB, from the SSGC
+* Not coded so much for speed or memory, but for quick porting :)
+* Well, then selectively optimized for memory to keep it in 8k
+* TI Farmer - by Codex
+* ZomBXB - by Tursi
+* additional ideas - by Owen
+*
+* Backstory--- Farmer McOwen was assimilated into the Zombie collective--
+* - he then subsequently escaped with the help of the Harmless Lion.... 
+* Put into the witness protection program, Farmer...ahem... Zombie McOwen 
+* is relocated to Iowa where he starts a new farm... Strangely, the FBI 
+* forgot to give McOwen a new name--- so on a quick Google search, the 
+* zombie collective found Farmer McOwen's new location, and THEY'RE PISSED!!! 
+
+* VDP Usage:
+*
+* 0000	02FF	SDT  (reg 2, 0-F, scale >0400, value 00)
+* 0300	037F	SAT  (reg 5, 00-7F, scale >0080, value 06)
+* 0380  067F	backup for saving SDT (SAVESCR, RESTSCR)
+* 0680	07FF
+* 0800	0FFF	PDT for ZBXB (reg 4, 0-7, scale >0800, value 01) & SPT (reg 6, 0-7, scale >0800, value 01)
+* 1000	101F	CT for ZBXB	 (reg 3, 00-ff, scale >0040, value 40)
+* 1040  105F	CT for TI Farm (reg 3, 00-ff, scale >0040, value 41)
+* 1800	1FFF	PDT for TI Farm (reg 4, 0-7, scale >0800, value 03)
+* 2000  3FFF	
+*
+* Register usage
+* R0 - Scratch, argument passing
+* R1 - Scratch, argument passing
+* R2 - Scratch, argument passing
+* R3 - Scratch, argument passing
+* R4 - Scratch, argument passing
+* R5 - Scratch
+* R6 - Scratch
+* R7 - Scratch
+* R8 - Must contain >0001
+* R9 - Subroutine usage, outer loop
+* R10- Subroutine usage
+* R11- Return address for BL, subroutine usage
+* R12- Subroutine scratch
+* R13- Subroutine scratch
+* R14- Subroutine scratch
+* R15- GOSUB stack pointer
+*
+* Note here that we are only using separate color and pattern tables. TI Farmer doesn't
+* use sprites, so I left that alone, and we'll live with redrawing the screen since I'll
+* need some kind of transition anyway (and if I used separate screens I'd need to update
+* every function that touches the screen, which is nearly all of them. To snapshot the 
+* screen, I just wrote a function to copy the screen to unused VDP RAM instead. ;) )
+
+* Variables in RAM
+		AORG >8320
+	
+* TI FARMER VARIABLES	
+FS		EQU 16
+FX		EQU 3
+FY		EQU 7
+
+MX		BSS 2			* message to be displayed at 5,1 for updates
+FM 		BSS 2			* number of farmers (1-5)
+AC		BSS 2			* temporary keypress used to distinguish plow/seed/reap (1-3)
+MN		BSS 2			* money earned
+NL		BSS 2			* temporary used to update fields (original value)
+NC		BSS 2			* temporary used to update fields (new value)
+SN		BSS 2			* season (1-4)
+YR		BSS 2			* year (1900-2000)
+SX		BSS 2			* temporary for screen x
+SY		BSS 2			* temporary for screen y
+SC		BSS 2			* square area of an effect (may be less than field size of 16)
+CN		BSS 2			* random value decides if an event is good or bad
+M		BSS 2			* message displayed at 24,1
+Q		BSS 2			* translated keypress
+
+* ZOMBXB VARIABLES
+
+ZR		BSS	28			* Zombie rows (bytes!)
+ZC		BSS	28			* Zombie cols (bytes!)
+R		BSS 2			* PLAYER ROW
+C		BSS 2			* PLAYER COL
+SC2		BSS 2			* SCORE
+N		BSS 2			* NUMBER ZOMBIES
+MX2		BSS 2			* MAXIMUM ZOMBIES
+TR		BSS 2			* TEMP ZOMBIE ROL
+TC		BSS 2			* TEMP ZOMBIE COL
+NR		BSS	2			* TEMP ZOMBIE ROL (MOVING)
+NC2		BSS 2			* TEMP ZOMBIE COL (MOVING)
+A		BSS 2			* TEMP GCHAR VAR
+
+* MOTIF VARIABLES
+
+ZMQUAD	BSS 2			* workaround for poor RNG - continuously incrementing number for quad
+QUAD	BSS 2			* Quad attacked by zombies
+zQR		BSS 2			* Coordinates of quad (or whole field)
+zQC		BSS 2			* damaged by zombies 
+ZQS		BSS 2			* Size (0 if no damage)
+
+* SHARED VARIABLES
+MODE	BSS 2			* remember whether we are in TI Farmer or ZomBXB mode
+MOTIF	BSS 2			* set when we are in MOTIF mode instead of individual games
+X					
+K		BSS 2			* temporary for key pressed (reused for x for joystick)
+Y					
+S		BSS 2			* temporary for key press (reused for y for joystick)
+SNDDEL	BSS 2			* SOUND COUNTDOWN DELAY IN FRAMES
+OLDKEY	BSS 2			* used in KSCAN to calculate S properly
+STRBUF	BSS 32			* STRING BUFFER (1 LINE)
+RNDSED  BSS 2			* our own random number seed location
+STACK	BSS 16			* USE R15 AS POINTER FOR GOSUBS
+ENDSTK
+
+* Cartridge Header
+		AORG >6000
+
+* PROGRAMS ARE LISTED IN REVERSE ORDER
+		
+		DATA >AA01,>0200,>0000,PROG1,>0000,>0000
+PROG1	DATA PROG2,GOZOMB,>065A
+		TEXT 'OMBXB'
+		EVEN
+PROG2	DATA PROG3,GOFARM,>0954
+		TEXT 'I FARMER'
+		EVEN
+PROG3	DATA >0000,GOMOTIF,>0C5A
+		TEXT 'OMBIE MOTIF'
+		EVEN
+	
+************************
+* TI Farmer - by Codex *
+* Ported by Tursi      *
+************************
+
+*900 DATA "PLOW","SEED","REAP","HIRE","QUIT"
+*910 DATA 3,7,11,7,3,15,11,15,"SUMMER","AUTUMN","WINTER","SPRING"
+*915 DATA 15,15,15,15,15,15,15,15,11,12,4,13,10,14
+*920 DATA "OLD McOWEN'S TI FARM","WHAT WILL YOU DO NEXT?","CROPS ARE 
+*GROWING..."," WHICH QUAD? (1-4)"
+*930 DATA "YOU'VE HIRED A FARMHAND","NOT ENOUGH MONEY","YOU HAVE A FULL 
+*STAFF","YOU EARNED $"," BY "
+*940 DATA "DROUGHT BAKES YOUR SOIL!","BIRDS EAT YOUR SEEDS!","INSECTS RAVAGE 
+*YOUR CROPS!","ZOMBIES EAT A FARMHAND!","TAXES COME DUE!"
+*950 DATA "A NEW TRACTOR!","SELF-SEEDING CROP WORKS!","ABUNDANT 
+*RAINS!","VOLUNTEER FARMHAND!","WINDFALL PROFITS THIS YEAR!"
+*960 DATA 
+*96,104,"BCDBA7B95AE7D73B",104,112,"FF9F66F9FF9F66F9",120,96,"E7DB995A7EBD99A5
+*",112,120,"AAA22A88AAA22A88"
+*970 DATA 
+*128,"885C487C4A485454",129,"183C3C187E993C7E",130,"1848583C1A1C286C",131,"183
+*C187EBD3C2466",132,"00183A0A3C481422"
+
+* Code and constants in ROM
+EMPTY	TEXT '+'
+		EVEN
+		
+* MUST BE 4 CHARS
+PLOW	TEXT 'PLOW+'
+		EVEN
+SEED	TEXT 'SEED+'
+		EVEN
+REAP	TEXT 'REAP+'
+		EVEN
+HIRE	TEXT 'HIRE+'
+		EVEN
+QUIT	TEXT 'QUIT+'
+		EVEN
+PREF	TEXT '(x)+'
+		EVEN
+KA		DATA PLOW,SEED,REAP,HIRE,QUIT
+
+QX		DATA 3,11,3,11
+QY		DATA 7,7,15,15
+
+* MUST BE 6 CHARS
+SUMMER	TEXT 'SUMMER'
+AUTUMN	TEXT 'AUTUMN'
+WINTER	TEXT 'WINTER'
+SPRING	TEXT 'SPRING'
+SE		DATA SUMMER,AUTUMN,WINTER,SPRING
+
+COLS	BYTE 15,15,15,15,15,15,15,15,11,12,4,13,10,14
+
+* MUST TERMINATE WITH '+'
+TXT1	TEXT 'OLD McOWEN''S TI FARM+'
+TXT2	TEXT 'WHAT WILL YOU DO NEXT?+'
+*TXT3	TEXT 'CROPS ARE GROWING...  +'
+TXT4	TEXT ' WHICH QUAD? (1-4)+'
+TXT5	TEXT 'YOU''VE HIRED A FARMHAND+'
+TXT6 	TEXT 'NOT ENOUGH MONEY+'
+TXT7	TEXT 'YOU HAVE A FULL STAFF+'
+TXT8	TEXT 'YOU EARNED $+'
+TXT9	TEXT ' BY +'
+TXT10	TEXT 'DROUGHT BAKES YOUR SOIL!+'
+TXT11	TEXT 'BIRDS EAT YOUR SEEDS!+'
+TXT12	TEXT 'INSECTS RAVAGE YOUR CROPS!+'
+TXT13	TEXT 'ZOMBIES EAT A FARMHAND!+'
+TXT14	TEXT 'TAXES COME DUE!+'
+TXT15	TEXT 'A NEW TRACTOR!+'
+TXT16	TEXT 'SELF-SEEDING CROP WORKS!+'
+TXT17	TEXT 'ABUNDANT RAINS!+'
+TXT18	TEXT 'VOLUNTEER FARMHAND!+'
+TXT19	TEXT 'WINDFALL PROFITS THIS YEAR!+'
+		EVEN
+		
+* LN matches CHARS1		
+LN		DATA 96,104,120,112,0
+LC		DATA 104,112,96,120
+
+CHARS1	BYTE >BC,>DB,>A7,>B9,>5A,>E7,>D7,>3B
+		BYTE >FF,>9F,>66,>F9,>FF,>9F,>66,>F9
+		BYTE >E7,>DB,>99,>5A,>7E,>BD,>99,>A5
+		BYTE >AA,>A2,>2A,>88,>AA,>A2,>2A,>88
+		EVEN
+
+* STARTS AT 128		
+CHARS2	BYTE >88,>5C,>48,>7C,>4A,>48,>54,>54
+		BYTE >18,>3C,>3C,>18,>7E,>99,>3C,>7E
+		BYTE >18,>48,>58,>3C,>1A,>1C,>28,>6C
+		BYTE >18,>3C,>18,>7E,>BD,>3C,>24,>66
+		BYTE >00,>18,>3A,>0A,>3C,>48,>14,>22
+		BYTE >FF,>BD,>DB,>E7,>E7,>DB,>BD,>FF
+	
+GOFARM	CLR @MODE		* set mode to TI Farmer mode
+		CLR @MOTIF		* not running MOTIF mode
+		BL @GOGO		* init
+		BL @INITVDP
+		LI R15,STACK
+
+*100 OPTION BASE 1 :: DIM LN(4),LC(4),KA$(5),QX(4),QY(4),MS$(19),SE$(4):: 
+*FM=1 :: FX=3 :: FY=7 :: FS=16 :: QD=0 :: AC=0 :: MN=0 :: NL=0 :: NC=0 :: 
+*SN=1 :: YR=1900
+
+* not using QD anymore, was only a temporary
+* not using FS,FX,FY now const EQUs
+
+L100	MOV R8,R0	* LOADS 1
+		MOV R0,@FM
+		MOV R0,@SN
+		CLR @AC
+		CLR @MN
+		CLR @NL
+		CLR @NC
+		CLR @QUAD	* technically a MOTIF variable, but we use it in the display code
+		LI R0,1900
+		MOV R0,@YR
+
+*110 SX=0 :: SY=0 :: SC=0 :: M$="" :: FOR I=1 TO 5 :: READ KA$(I):: NEXT I :: 
+*FOR I=1 TO 4 :: READ QX(I),QY(I):: NEXT I :: FOR I=1 TO 4 :: READ SE$(I):: 
+*NEXT I
+
+* SE is predefined in ROM
+* KA is predefined in ROM
+* QX AND QY ARE PREDEFINED IN ROM
+
+L110	CLR @SX
+		CLR @SY
+		CLR @SC
+		LI R0,EMPTY
+		MOV R0,@M
+		MOV R0,@MX
+
+*120 RANDOMIZE :: CALL SCREEN(2):: CALL CLEAR :: FOR I=1 TO 14 :: READ C :: 
+*CALL COLOR(I,C,1):: NEXT I :: FOR I=1 TO 19 :: READ MS$(I):: NEXT I
+
+* MS is NO LONGER USED
+
+L120	LI R0,2
+		BL @SCREEN
+		BL @CLEAR
+		
+		MOV R8,R0	* LOADS 1
+		MOV R0,R2
+		LI R3,COLS
+L120_1	CLR R1
+		MOVB *R3+,R1
+		SWPB R1
+		BL @COLOR
+		INC R0
+		CI R0,15
+		JNE L120_1
+
+
+*125 DISPLAY AT(1,1)SIZE(28):MS$(1):: GOSUB 700 :: FOR I=1 TO 4 :: READ 
+*V,W,L$ :: LN(I)=V :: LC(I)=W :: CALL CHAR(V,L$):: NEXT I
+
+* LN and LC are now defined in ROM
+
+L125	LI R0,TXT1
+		MOV R8,R1	* LOADS 1
+		MOV R1,R2
+		BL @DISPLAY
+		LI R0,L700
+		BL @GOSUB
+		
+		LI R4,LN		* CHAR NUMBERS
+		LI R1,CHARS1	* TABLE DATA
+		LI R2,8			* NUMBER OF BYTES FOR CHAR
+		
+L125_1	MOV *R4+,R0		* GET CHAR
+		JEQ L125_2
+		BL @CHAR
+		AI R1,8			* skip bytes
+		JMP L125_1
+L125_2
+
+*130 FOR I=1 TO FS :: CALL HCHAR(I+FY-1,FX,LN(1),FS):: NEXT I :: FOR I=1 TO 5 
+*:: READ CC,FC$ :: CALL CHAR(CC,FC$):: NEXT I
+
+L130	MOV R8,R4	* LOADS 1 - LI R4,1
+L130_1	MOV R4,R0
+		AI R0,FY-1
+		LI R1,FX
+		MOV @LN,R2
+		LI R3,FS
+		BL @HCHAR
+		INC R4
+		CI R4,FS
+		JH L130_2
+		JMP L130_1
+* CHARS2 SIMPLIFIED TO A SINGLE BLOCK
+L130_2	LI R0,128
+		LI R1,CHARS2
+		LI R2,6*8
+		BL @CHAR
+		
+*140 CALL HCHAR(FY,FX-1,49):: CALL HCHAR(FY,FX+FS,50):: CALL 
+*HCHAR(FY+FS-1,FX-1,51):: CALL HCHAR(FY+FS-1,FX+FS,52)
+
+L140	LI R0,FY
+		LI R1,FX-1
+		LI R2,49
+		BL @HCHAR1
+		
+		LI R1,FX+FS
+		INC R2
+		BL @HCHAR1
+		
+		AI R0,FS-1
+		LI R1,FX-1
+		INC R2
+		BL @HCHAR1
+		
+		LI R1,FX+FS
+		INC R2
+		BL @HCHAR1
+
+*150 FOR I=1 TO 5 :: DISPLAY 
+*AT(FY+((I-1)*2),FX+FS+1)SIZE(8):"(";CHR$(I+64);") ";KA$(I):: NEXT I
+
+* rewrote this to be a simpler loop (no string building needed)
+
+L150	LI R4,0
+L150_1	LI R2,20
+		LI R0,PREF
+		MOV R4,R1
+		SLA R1,1
+		AI R1,7
+		BL @DISPLAY
+		MOV R4,R0
+		SLA R0,1
+		AI R0,KA
+		MOV *R0,R0
+		AI R2,4
+		BL @DISPLAY
+		MOV R1,R0
+		MOV R2,R1
+		DEC R1
+		MOV R4,R2
+		AI R2,65
+		BL @HCHAR1
+		INC R4
+		CI R4,5
+		JNE L150_1
+
+*200 K=0 :: Q=0 :: AC=0 :: M$=MS$(2):: GOSUB 700 :: GOSUB 800
+L200	CLR @K
+		CLR @Q
+		CLR @AC
+		LI R0,TXT2
+		MOV R0,@M
+		LI R0,L700
+		BL @GOSUB
+		LI R0,L800
+		BL @GOSUB
+
+*230 CALL KEY(0,K,S):: IF S=0 THEN 230 ELSE Q=K-64 :: IF Q>0 AND Q<6 THEN ON 
+*Q GOTO 240,240,240,250,270 ELSE 230
+
+L230	BL @WAITKEY
+		MOV R1,@K
+		MOV R2,@S
+		
+		AI R1,-64
+		MOV R1,@Q
+		JEQ L230
+		CI R1,6
+		JHE L230
+		CI R1,4
+		JEQ L250
+		CI R1,5
+		JEQ L270
+
+* Plow, Seed, and Reap (Q=1-3)
+*240 AC=Q :: NL=LN(AC):: NC=LC(AC):: M$=KA$(AC)&MS$(4):: MX$="" :: GOSUB 800 
+*:: GOTO 300
+
+L240	MOV @Q,R0
+		MOV R0,@AC
+		DEC R0
+		SLA R0,1
+		LI R1,LN
+		A R0,R1
+		MOV *R1,@NL
+		LI R1,LC
+		A R0,R1
+		MOV *R1,@NC
+		LI R1,STRBUF
+		MOV R1,@M
+		MOV R1,R2
+		LI R3,KA
+		A R0,R3
+		MOV *R3,R3
+		MOV *R3+,*R2+
+		MOV *R3+,*R2+
+		LI R3,TXT4
+		LI R5,>2B00
+L240_1	MOVB *R3+,R4
+		MOVB R4,*R2+
+		CB R4,R5
+		JNE L240_1
+L240_2	LI R3,EMPTY
+		MOV R3,@MX
+		LI R0,L800
+		BL @GOSUB
+		JMP L300
+
+* Hire
+*250 IF MN>250 AND FM<5 THEN FM=FM+1 :: MN=MN-250 :: MX$=MS$(5)ELSE IF MN<250 
+*THEN MX$=MS$(6)ELSE MX$=MS$(7)
+
+L250	MOV @MN,R0
+		CI R0,251
+		JL L250_1
+		MOV @FM,R1
+		CI R1,5
+		JHE L250_1
+		INC @FM
+		AI R0,-250
+		MOV R0,@MN
+		LI R2,TXT5
+		MOV R2,@MX
+		JMP L250_3
+		
+L250_1	CI R0,250
+		JHE L250_2
+		LI R2,TXT6
+		MOV R2,@MX
+		JMP L250_3
+		
+L250_2	LI R2,TXT7
+		MOV R2,@MX
+		
+L250_3
+
+*260 GOSUB 800 :: GOSUB 400 :: GOSUB 700 :: IF YR<2000 THEN 600
+
+L260	LI R0,L800
+		BL @GOSUB
+		LI R0,L400
+		BL @GOSUB
+		LI R0,L700
+		BL @GOSUB
+		MOV @YR,R0
+		CI R0,2000
+		JHE L260_1
+		B @L600
+L260_1
+
+* Quit
+*270 CALL CLEAR :: CALL SCREEN(8):: PRINT MS$(8);MN :: PRINT MS$(9);SE$(SN);" 
+*";YR :: END
+
+L270	
+* MOTIF Mode, return indicating game over
+		MOV @MOTIF,R0
+		JEQ L270_1
+		CLR R0
+		B @RETURN
+
+* Non-MOTIF mode ending
+L270_1
+* need to make this a subroutine so the MOTIF ending can call it
+		LI R0,L270_2
+		BL @GOSUB
+		B @END
+
+L270_2
+		BL @CLEAR
+*		LI R0,8				I don't like the call screen 8, removing that
+*		BL @SCREEN			
+		LI R0,TXT8
+		LI R1,6
+		MOV R8,R2	* LOADS 1 - LI R2,1
+		BL @DISPLAY
+		LI R2,14
+		MOV @MN,R0
+		BL @DISNUM
+		LI R0,TXT9
+		LI R1,7
+		MOV R8,R2	* LOADS 1 - LI R2,1
+		BL @DISPLAY
+		LI R0,STRBUF
+		LI R2,5
+		MOV @SN,R3
+		SLA R3,1
+		AI R3,SE
+		DECT R3
+		MOV *R3,R3
+		MOV R0,R4
+		MOV *R3+,*R4+
+		MOV *R3+,*R4+
+		MOV *R3+,*R4+
+		LI R3,>2B00
+		MOV R3,*R4+
+		BL @DISPLAY
+		MOV @YR,R0
+		AI R2,7
+		BL @DISNUM
+		B @RETURN			* instead of END
+
+*300 CALL KEY(0,K,S):: IF S=0 THEN 300 ELSE Q=K-48 :: IF Q>0 AND Q<5 THEN 
+*QD=Q :: SX=QX(QD):: SY=QY(QD):: SC=7 :: GOSUB 500 :: GOTO 260 ELSE 300
+
+* not using QD anymore, was only a temporary
+
+L300	BL @WAITKEY
+		MOV R1,@K
+		MOV R2,@S
+		
+		AI R1,-48
+		MOV R1,@Q
+		JEQ L300
+		CI R1,5
+		JHE L300
+		
+		DEC R1
+		SLA R1,1
+		MOV R1,R2
+		AI R2,QX
+		MOV *R2,@SX
+		MOV R1,R2
+		AI R2,QY
+		MOV *R2,@SY
+		LI R0,7
+		MOV R0,@SC
+		LI R0,L500
+		BL @GOSUB
+		JMP L260
+		
+*400 SN=SN+1 :: IF SN>4 THEN SN=1 :: YR=YR+1 :: M$=MS$(3):: GOSUB 800 :: AC=0 
+*:: NL=LN(4):: NC=LC(4):: SX=FX :: SY=FY :: SC=15 :: GOSUB 500 :: RETURN ELSE 
+*RETURN
+
+L400	INC @SN
+		MOV @SN,R0
+		CI R0,5
+		JL L400_1
+		
+		MOV R8,R0	* LOADS 1 - LI R0,1
+		MOV R0,@SN
+		INC @YR
+* 'Crops are growing' goes by so fast as to be unreadable, and
+* I really need the ROM space, so removing it.
+*		LI R0,TXT3
+*		MOV R0,@M
+*		LI R0,L800
+*		BL @GOSUB
+		CLR @AC
+		LI R0,LN+6
+		MOV *R0,@NL
+		LI R0,LC+6
+		MOV *R0,@NC
+		LI R0,FX
+		MOV R0,@SX
+		LI R0,FY
+		MOV R0,@SY
+		LI R0,15
+		MOV R0,@SC
+		LI R0,L500
+		BL @GOSUB
+		
+L400_1	B @RETURN
+
+*500 FOR Y=SY TO SY+SC :: FOR X=SX TO SX+SC :: CALL PT(Y,X,NL,NC,AC,MN):: 
+*NEXT X :: NEXT Y :: GOSUB 700 :: RETURN
+*1000 SUB PT(Y,X,NL,NC,AC,MN)
+*1010 CALL GCHAR(Y,X,G):: IF G=NL THEN CALL HCHAR(Y,X,NC):: IF AC=3 THEN 
+*MN=MN+1
+*1020 SUBEND
+
+L500	MOV @SY,R4
+		MOV @SC,R5
+		
+L500_1	MOV @SX,R6
+		MOV @SC,R7
+		
+L500_2	MOV R4,R0
+		MOV R6,R1
+		BL @GCHAR
+		
+		C @NL,R2
+		JNE L500_3
+		
+		MOV @NC,R2
+		BL @HCHAR1
+		MOV @AC,R0
+		CI R0,3
+		JNE L500_3
+		INC @MN
+		
+L500_3	INC R6
+		DEC R7
+		JOC L500_2
+		
+		INC R4
+		DEC R5
+		JOC L500_1
+		
+		LI R0,L700
+		BL @GOSUB
+		B @RETURN
+
+*600 CN=INT(RND*2)+1 :: ON INT(RND*20)+1 GOTO 
+*200,200,200,200,200,200,200,200,200,200,200,200,200,200,200,610,620,630,
+*640,650
+
+* CN handling changed a little to save space - now 0 or 1 instead of 1 or 2
+* we compare against zero instead of 1 to save on the compare
+
+L600	BL @RND
+		SRL R0,15		* one bit left!
+		MOV R0,@CN
+		
+		BL @RND
+		ANDI R0,31
+L600_1	CI R0,20
+		JL L600_2
+		AI R0,-20
+		JMP L600_1
+		
+L600_2	CI R0,15
+		JEQ L610
+		CI R0,16
+		JEQ L620
+		CI R0,17
+		JEQ L630
+		CI R0,18
+		JNE L600_3
+		B @L640
+L600_3	CI R0,19
+		JNE L600_4
+		B @L650
+L600_4	B @L200
+
+* Common handler for first three options
+* R0=NL ADR, R1=NC ADR, R2=MX
+L605	MOV *R0,@NL
+		MOV *R1,@NC
+		MOV R2,@MX
+		MOV @FM,R0
+		SLA R0,1
+		
+		MOV @CN,R1
+		JNE L606
+
+		LI R1,18
+		S R0,R1
+		MOV R1,@SC
+		B @L660
+		
+L606	AI R0,6				* bugfix - +8 would give sizes of 18 but the field is only 16!
+		MOV R0,@SC
+		B @L660
+		
+* Drought, or a new tractor!
+*610 IF CN=1 THEN NL=LN(2):: NC=LN(1):: MX$=MS$(10):: SC=18-(FM*2):: GOTO 660 ELSE NL=LN(1):: 
+*NC=LN(2):: SC=8+(FM*2):: MX$=MS$(15):: GOTO 660
+
+L610	MOV @CN,R0
+		JNE L610_1
+		
+		LI R0,LN+2
+		LI R1,LN
+		LI R2,TXT10
+		JMP L605
+		
+L610_1	LI R0,LN
+		LI R1,LN+2
+		LI R2,TXT15
+		JMP L605
+
+* Birds, or Self-seeding crops
+*620 IF CN=1 THEN NL=LN(4):: NC=LN(2):: MX$=MS$(11):: SC=18-(FM*2):: GOTO 660 
+*ELSE NL=LN(2):: NC=LN(4):: SC=8+(FM*2):: MX$=MS$(16):: GOTO 660
+
+L620	MOV @CN,R0
+		JNE L620_1
+		
+		LI R0,LN+6
+		LI R1,LN+2
+		LI R2,TXT11
+		JMP L605
+		
+L620_1	LI R0,LN+2
+		LI R1,LN+6
+		LI R2,TXT16
+		JMP L605
+
+* Insects, or abundant rains
+*630 IF CN=1 THEN NL=LN(3):: NC=LN(2):: MX$=MS$(12):: SC=18-(FM*2):: GOTO 660 
+*ELSE NL=LN(4):: NC=LN(3):: SC=8+(FM*2):: MX$=MS$(17):: GOTO 660
+
+L630	MOV @CN,R0
+		JNE L630_1
+		
+		LI R0,LN+4
+		LI R1,LN+2
+		LI R2,TXT12
+		JMP L605
+		
+L630_1	LI R0,LN+6
+		LI R1,LN+4
+		LI R2,TXT17
+		JMP L605
+
+* Zombies, or volunteer farmhand
+*640 IF CN=1 AND FM>1 THEN FM=FM-1 :: MX$=MS$(13):: GOSUB 800 :: GOTO 200 
+*ELSE IF FM<5 THEN FM=FM+1 :: MX$=MS$(18):: GOSUB 800 :: GOTO 200 ELSE 200
+
+L640	MOV @CN,R0
+		JNE L640_C
+		
+* In MOTIF mode, always run	the Zombie subgame
+		MOV @MOTIF,R0
+		JEQ L640_B
+* set flag for zombie attack
+L640_A	SETO R0
+		B @RETURN
+
+* Non-MOTIF mode, make sure we have enough farmhands before eating one
+L640_B	MOV @FM,R0
+		CI R0,2
+		JLT L640_C
+		
+		DEC @FM
+		LI R0,TXT13
+		MOV R0,@MX
+		LI R0,L800
+		BL @GOSUB
+		B @L200
+		
+L640_C	MOV @FM,R0
+		CI R0,4
+		JLE L640_D
+* In MOTIF mode, redirect a full staff to the zombie game
+		MOV @MOTIF,R0
+		JNE L640_A
+		JMP L640_E
+		
+L640_D	INC @FM
+		LI R0,TXT18
+		MOV R0,@MX
+		LI R0,L800
+		BL @GOSUB
+		
+L640_E	B @L200	
+
+* Taxes, or windfall profits
+*650 IF CN=1 THEN MN=MN-INT(MN/(9+FM)):: MX$=MS$(14):: GOSUB 800 :: GOTO 200 
+*ELSE MN=MN+INT(MN/(11-FM)):: MX$=MS$(19):: GOTO 200
+
+L650	MOV @CN,R0
+		JNE L650_1
+		
+		MOV @FM,R0
+		AI R0,9
+		CLR R2
+		MOV @MN,R3
+		DIV R0,R2
+		MOV @MN,R3
+		S R2,R3
+		MOV R3,@MN
+		
+		LI R0,TXT14
+		MOV R0,@MX
+		LI R0,L800
+		BL @GOSUB
+		B @L200
+		
+L650_1	LI R0,11
+		S @FM,R0
+		CLR R2
+		MOV @MN,R3
+		DIV R0,R2
+		A @MN,R2
+		MOV R2,@MN
+		
+		LI R0,TXT19
+		MOV R0,@MX
+		B @L200
+
+*660 GOSUB 700 :: SY=INT(RND*(FS-SC))+FY :: SX=INT(RND*(FS-SC))+FX :: GOSUB 
+*500 :: GOTO 200
+
+L660	LI R0,L700
+		BL @GOSUB
+		BL @RND
+		ANDI R0,>001F
+		LI R1,FS
+		S @SC,R1
+		JNE L660_1
+* if FS-SC is 0, then just store the base values
+		LI R0,FY
+		MOV R0,@SY
+		LI R0,FX
+		MOV R0,@SX
+		JMP L660_5
+		
+L660_1	C R0,R1
+		JL L660_2
+		S R1,R0
+		JMP L660_1
+		
+L660_2	AI R0,FY
+		MOV R0,@SY
+		
+		BL @RND
+		ANDI R0,>001F
+L660_3	C R0,R1
+		JL L660_4
+		S R1,R0
+		JMP L660_3
+		
+L660_4	AI R0,FX
+		MOV R0,@SX
+		
+L660_5	LI R0,L500
+		BL @GOSUB
+		
+		B @L200
+
+*700 DISPLAY AT(3,1)SIZE(28):SE$(SN);" ";YR;" $";MN :: DISPLAY 
+*AT(5,1)SIZE(28):MX$ :: RETURN
+
+L700	LI R0,3
+		BL @CLRLIN
+		LI R3,STRBUF
+		MOV @SN,R0
+		SLA R0,1
+		AI R0,SE
+		DECT R0
+		MOV *R0,R0
+		MOV *R0+,*R3+		* copy season word to buffer
+		MOV *R0+,*R3+
+		MOV *R0+,*R3+
+		LI R0,>2020			* spaces for padding
+		MOV R0,*R3+
+		MOV R0,*R3+
+		MOV R0,*R3+
+		MOV R0,*R3+
+		LI R0,>242B			* $ then + for end of line
+		MOV R0,*R3+
+		LI R0,STRBUF
+		LI R1,3
+		MOV R8,R2	* LOADS 1 - LI R2,1
+		BL @DISPLAY
+		MOV @YR,R0
+		LI R2,9
+		BL @DISNUM
+		MOV @MN,R0
+		LI R2,17
+		BL @DISNUM
+		
+		LI R0,5
+		BL @CLRLIN
+		MOV R0,R1
+		MOV @MX,R0
+		MOV R8,R2	* LOADS 1 - LI R2,1
+		BL @DISPLAY
+		
+* a little hacky, but I'm desperate - this is MOTIF mode only
+		MOV @QUAD,R2
+		JEQ QUAD1
+		AI R2,48
+		LI R0,5
+		LI R1,23
+		BL @HCHAR1
+		CLR @QUAD
+QUAD1
+		
+		B @RETURN
+
+*800 DISPLAY AT(24,1)SIZE(28):M$ :: FOR I=1 TO FM :: CALL 
+*HCHAR(20,22+I,127+I):: NEXT I :: FOR I=FM+1 TO 5 :: CALL HCHAR(20,22+I,32):: 
+*NEXT I :: RETURN
+
+L800	MOV @M,R0
+		LI R1,24
+		MOV R8,R2	* LOADS 1 - LI R2,1
+		BL @DISPLAY
+		
+		MOV R8,R4	* LOADS 1 - LI R4,1
+L800_1	LI R0,20
+		LI R1,22
+		A R4,R1
+		LI R2,127
+		A R4,R2
+		BL @HCHAR1
+		
+		INC R4
+		C @FM,R4
+		JHE L800_1
+		
+		MOV @FM,R4
+		INC R4
+L800_2	CI R4,6
+		JHE	L800_3
+		LI R0,20
+		LI R1,22
+		A R4,R1
+		LI R2,32
+		BL @HCHAR1
+		
+		INC R4
+		JMP L800_2
+		
+L800_3	B @RETURN
+		
+************
+* ZomBXB   *
+* by Tursi *
+************
+
+* 5000 DATA 00000000000000AD0000000001010FFF7870F0FFF0E0FFFF18180888E838FCFF,
+* 00000000000000F000000000000000000000000000000000573F3F7F3F3F3F1F
+* 5010 DATA FFFFFFFFFFFFFFFFFFFDF8F1D9FBFFFDFF7FDFEF6FFD9503FFFFFFFFFFFFFFFF,
+* 00C0C0E0E0C08000000000000000073C0F0300001C7EC381FFFF031F63F80FE3
+* 5020 DATA F8F8F3FF897EFFFF0B0F1F3CE30FF8C0FCF00000008000000000000000000000,
+* F1800000000040C100105838181848D8FFF1717170707070FFFF7C9CCDFB7678
+* 5030 DATA C080C0E09F1E383800000000E06030300000000000000000071FFC4080F0FCFF,
+* F878383939191B5B78D090F8FFFFFFFF4040A080E1FBFEFF7C74F7E6EEEF4E4C
+* 5040 DATA 301018181C06060600000000000000001F0F07080810307CFFFFF08000005826,
+* FFDF073DE3602010FFFFFFFF7FDF3F17DCDEFEE783838101030303030382C0C0
+* 5050 DATA 0000000080808080C60203010000000001281E82FB3F7FFF98CE053FFFFFFFFF,
+* 0D0FFF6FDFF7FDFFC3E3F9FEFF8F83E09FFEE0EFFFF0F8FFC060F0F0F8787838
+
+*5060 DATA 36,01030F0300030F1F3B3303070E0C0C0C80C0F0C000C0F0F8DCCCC0E070303030,
+*40,000000001F1F1B1B13030F0B0C0C0C1C00000000F8F8D8D8
+*5070 DATA 44,01034F331C0E0703030303070F1E387080C0F2CC3870E0C0C0C0C0E0F0781C0,
+*60,00000000006070381F0F070303073F7C0000000000060E1C
+*5080 DATA 58,3C7E3C66,59,3C664242,34,1122FF1122FF1122,140,00000055AA,
+*141,1008100810081008,43,C8C0F0D030303038,63,F8F0E0C0C0E0FC3E,35,0038440408100010
+
+*5090 DATA 4,10,1,6,14,12,0,0
+
+CHARS3	
+* 0-17 IS THE GRAVESTONE
+* 18-27 IS THE HAND
+		DATA >0E19,>191C,>2020,>7C3A		* AB
+		DATA >0000,>00E0,>20E0,>8080		* CDE
+		DATA >0A06,>0607,>0418,>3070		* FGH
+		DATA >4040,>40BE,>0100,>0000		* IJK
+		DATA >0000,>0000,>8040,>4020		* LMNO
+		DATA >60E7,>A4A3,>A2A2,>A1A0		*  PQR
+		DATA >0E29,>A324,>9252,>0000
+		DATA >2010,>1010,>0808,>0844
+		DATA >5050,>5150,>2828,>2814
+		DATA >0148,>0001,>0440,>0001
+		DATA >0404,>0222,>0202,>2101
+		DATA >1414,>120A,>0A0B,>0700
+		DATA >2400,>0000,>0029,>DE80
+		DATA >0101,>0101,>3FF0,>8000
+		DATA >0078,>70D8,>881C,>1800
+		DATA >7B2F,>1200,>0000,>0000
+		DATA >22C3,>2120,>0000,>0000
+		DATA >00C0,>4040,>0000,>0000
+		DATA >0000,>0003,>0403,>0201
+		DATA >0000,>00C0,>20E0,>11E8
+		DATA >0101,>3945,>2311,>0804
+		DATA >E83C,>668A,>39CD,>7A42
+		DATA >027B,>71D9,>891D,>1902
+		DATA >0204,>8474,>4C48,>4A08
+		DATA >0AC2,>4244,>0404,>0808
+		DATA >0808,>0919,>1818,>1818
+		DATA >8878,>1838,>077C,>0100
+		DATA >1818,>1816,>F001,>E000
+		DATA >55AA,>54A8,>50A0,>4080
+		DATA >0102,>050A,>152A,>55AA
+		DATA >55AA,>55AA,>55AA,>55AA
+		DATA >54AA,>51AA,>45AA,>15AA
+
+* START AT 34
+CHARS4	DATA >1122,>FF11,>22FF,>1122
+		DATA >0038,>4404,>0810,>0010
+		DATA >0103,>0F03,>0003,>0F1F
+		DATA >3B33,>0307,>0E0C,>0C0C
+		DATA >80C0,>F0C0,>00C0,>F0F8
+		DATA >DCCC,>C0E0,>7030,>3030
+		DATA >0000,>0000,>1F1F,>1B1B
+		DATA >1303,>0F0B,>0C0C,>0C1C
+		DATA >0000,>0000,>F8F8,>D8D8
+		DATA >C8C0,>F0D0,>3030,>3038
+		DATA >0103,>4F33,>1C0E,>0703
+		DATA >0303,>0307,>0F1E,>3870
+		DATA >80C0,>F2CC,>3870,>E0C0
+		DATA >C0C0,>C0E0,>F078,>1C00
+		
+* START AT 58
+CHARS5	DATA >3C7E,>3C66,>0000,>0000
+		DATA >3C66,>4242,>0000,>0000
+		DATA >0000,>0000,>0060,>7038
+		DATA >1F0F,>0703,>0307,>3F7C
+		DATA >0000,>0000,>0006,>0E1C
+		DATA >F8F0,>E0C0,>C0E0,>FC3E
+		DATA >0008,>0810,>0000,>0000
+
+* START AT 81
+CHARS6	DATA >0000,>0000,>0030,>1020
+
+* START AT 91
+CHARS7	
+ECHAR	DATA >0000,>0000,>0000,>0000
+
+		DATA >0000,>0000,>0000,>00AD,>0000,>0000,>0101,>0FFF
+		DATA >7870,>F0FF,>F0E0,>FFFF,>1818,>0888,>E838,>FCFF
+		DATA >0000,>0000,>0000,>00F0,>0000,>0000,>0000,>0000
+		DATA >0000,>0000,>0000,>0000,>573F,>3F7F,>3F3F,>3F1F
+		DATA >FFFF,>FFFF,>FFFF,>FFFF,>FFFD,>F8F1,>D9FB,>FFFD
+		DATA >FF7F,>DFEF,>6FFD,>9503,>FFFF,>FFFF,>FFFF,>FFFF
+		DATA >00C0,>C0E0,>E0C0,>8000,>0000,>0000,>0000,>073C
+		DATA >0F03,>0000,>1C7E,>C381,>FFFF,>031F,>63F8,>0FE3
+		DATA >F8F8,>F3FF,>897E,>FFFF,>0B0F,>1F3C,>E30F,>F8C0
+		DATA >FCF0,>0000,>0080,>0000,>0000,>0000,>0000,>0000
+		DATA >F180,>0000,>0000,>40C1,>0010,>5838,>1818,>48D8
+		DATA >FFF1,>7171,>7070,>7070,>FFFF,>7C9C,>CDFB,>7678
+		DATA >C080,>C0E0,>9F1E,>3838,>0000,>0000,>E060,>3030
+		DATA >0000,>0000,>0000,>0000,>071F,>FC40,>80F0,>FCFF
+		DATA >F878,>3839,>3919,>1B5B,>78D0,>90F8,>FFFF,>FFFF
+		DATA >4040,>A080,>E1FB,>FEFF,>7C74,>F7E6,>EEEF,>4E4C
+		DATA >3010,>1818,>1C06,>0606,>0000,>0000,>0000,>0000
+		DATA >1F0F,>0708,>0810,>307C,>FFFF,>F080,>0000,>5826
+		DATA >FFDF,>073D,>E360,>2010,>FFFF,>FFFF,>7FDF,>3F17
+		DATA >DCDE,>FEE7,>8383,>8101,>0303,>0303,>0382,>C0C0
+		DATA >0000,>0000,>8080,>8080,>C602,>0301,>0000,>0000
+		DATA >0128,>1E82,>FB3F,>7FFF,>98CE,>053F,>FFFF,>FFFF
+		DATA >0D0F,>FF6F,>DFF7,>FDFF,>C3E3,>F9FE,>FF8F,>83E0
+		DATA >9FFE,>E0EF,>FFF0,>F8FF,>C060,>F0F0,>F878,>7838
+
+		DATA >0000,>0055,>AA00,>0000
+		DATA >1008,>1008,>1008,>1008
+		DATA >FFFF,>FFFF,>FFFF,>FFFF
+
+ZCHARS	DATA CHARS3,0,32*8,CHARS4,34,14*8,CHARS5,58,7*8,CHARS6,81,8,CHARS7,91,26*16,0
+
+COLS2	BYTE 4,10,1,6,14,12,0,0
+
+ZBXBT	TEXT 'ZOMBXB BY TURSI+'
+		EVEN
+WFOWEN	TEXT 'WITH FARMER OWEN+'
+		EVEN
+OHNOES	TEXT 'OH NOES! YOU DIED!+'
+		EVEN
+YOURSC	TEXT 'YOUR SCORE WAS+'
+		EVEN
+TRYAGA	TEXT 'TRY AGAIN# PRESS Y OR N+'
+		EVEN
+
+GOZOMB	SETO @MODE		* set mode to ZomBXB mode
+		CLR @MOTIF		* not running MOTIF mode
+		BL @GOGO		* init
+		BL @INITVDP
+		LI R15,STACK
+* We do the MAGNIFY for the title page here
+* so that we don't mess up the MOTIF intro
+* (it was forcing the screen back on when we
+* tried to hide the title page draw)
+		LI R0,2
+		BL @MAGNIFY
+		
+*5100 CALL INIT :: DIM ZR(27),ZC(27),RN(128):: CALL CLEAR :: CALL SCREEN(2):: 
+* RANDOMIZE :: CALL MAGNIFY(2):: A$="ZOMBXB BY TURSI" :: X=1
+
+* don't need init or randomize
+* not using RN for memory reasons
+* not using A for memory reasons
+
+L5100	BL @CLEAR
+* fast enough now that we don't need the call screen(2) to hide it
+* CALL MAGNIFY is done outside of this loop as it interferes with
+* the game setup in MOTIF mode		
+		MOV R8,R0	* LOADS 1 - LI R0,1
+		MOV R0,@X
+
+*5110 CALL CHAR(91,""):: FOR A=0 TO 6 :: FOR B=0 TO 6 :: 
+* F$(A)=F$(A)&CHR$(A*7+B+91):: NEXT B :: NEXT A
+
+* 91 defined in the array of chardefs
+* not using F$ to save memory
+* no need for this code
+
+L5110
+
+*5120 FOR A=0 TO 44 STEP 4 :: READ B$ :: CALL CHAR(92+A,B$):: NEXT A :: 
+*CALL CHARPAT(63,B$):: CALL CHAR(35,B$):: GOSUB 5390
+
+* Cheating and writing the whole thwack in one
+* THIS COVERS ALL THE CHAR LOOPS!
+
+L5120	LI R3,ZCHARS
+ZCHAR1	MOV *R3+,R1
+		JEQ ZCHARX
+		MOV *R3+,R0
+		MOV *R3+,R2
+		BL @CHAR
+		JMP ZCHAR1
+ZCHARX
+		LI R0,L5390		* BRING UP THE FARMER AND SET SCREEN COLOR
+		BL @GOSUB
+
+*5130 FOR A=1 TO LEN(A$):: N=RND*5+5 :: C=ASC(SEG$(A$,A,1)):: P=A*16 :: CALL *SPRITE(#X,C,N,96,P,20,0,#X+14,C,N,90,P,-20,0):: X=X-(C<>32):: NEXT A
+
+* WARNING: NO AUTOMOTION SUPPORT HERE SINCE THE TITLE PAGE IS GOING 
+* TO BE REDONE
+* logic is pretty different in this loop, instead of len we watch for the +
+* end of string character.. could do away with 'A' (R5 here)
+
+L5130	LI R5,0
+L51301	BL @RND
+		ANDI R0,7
+L51302	CI R0,5
+		JL L51303
+		AI R0,-5
+		JMP L51302
+L51303	AI R0,5
+		MOV R0,R2
+		LI R0,ZBXBT
+		A R5,R0
+		CLR R1
+		MOVB *R0,R1
+		CI R1,>2B00
+		JEQ L51305
+		SWPB R1
+		MOV R5,R4
+		INC R4
+		SLA R4,4
+		AI R4,-8	  * manual repositioning
+		MOV R5,R3     * no motion, so make a diagonal
+		SLA R3,2
+		AI R3,24
+		MOV @X,R0
+		BL @SPRITE
+		CI R1,32
+		JEQ L51304
+		INC @X
+L51304	INC R5
+		JMP L51301
+L51305
+
+*5140 PRINT : :TAB(7);"WITH FARMER OWEN": :;:: RANDOMIZE :: FOR A=1 TO 27 :: 
+* ZR(A)=1 :: ZC(A)=1 :: NEXT A :: FOR A=0 TO 128 :: RN(A)=INT(RND*24)+1 :: NEXT A
+
+L5140	LI R0,WFOWEN
+		LI R1,23
+		LI R2,7
+		BL @DISPLAY
+		
+		MOV R8,R0	* LOADS 1 - LI R0,1
+		LI R1,ZR
+		LI R2,ZC
+		LI R3,>0100
+L51401	MOVB R3,*R1+
+		MOVB R3,*R2+
+		INC R0
+		CI R0,29		* not exact - we init from 0-27, which is 28 entries
+		JL L51401
+
+*5150 ON ERROR 5160 :: FOR A=1 TO 99 :: READ N,B$ :: CALL CHAR(N,B$):: NEXT A
+
+* NO LONGER NEEDED
+
+* MOTIF - if in MOTIF mode, we are done
+		MOV @MOTIF,R0
+		JEQ L51503
+		B @RETURN
+L51503
+
+* intermediate code to wait for a key
+L5155	BL @WAITKEY
+
+*5160 FOR A=1 TO 20 :: RN(RI)=INT(RND*24)+1 :: RI=(RI+1)AND 127 :: NEXT A :: 
+* CALL CLEAR :: FOR A=1 TO 27 :: ZR(A)=1 :: NEXT A
+
+L5160	BL @CLEAR
+		MOV R8,R0	* LOADS 1 - LI R0,1
+		LI R1,ZR
+		LI R2,>0100
+L51601	MOVB R2,*R1+
+		INC R0
+		CI R0,29		* not exact - we init from 0-27, which is 28 entries
+		JL L51601
+
+*5170 CALL DELSPRITE(ALL):: ON ERROR 5180 :: RESTORE 5090 :: 
+*FOR A=1 TO 99 :: READ C,D :: CALL COLOR(C,D,1):: NEXT A
+
+L5170	BL @DSPRALL
+		LI R3,COLS2
+		MOV R8,R2	* LOADS 1 - LI R2,1
+L51701	CLR R0
+		MOVB *R3+,R0
+		JEQ L51702
+		SWPB R0
+		CLR R1
+		MOVB *R3+,R1
+		SWPB R1
+		BL @COLOR
+		JMP L51701
+L51702
+
+*5180 CALL HCHAR(23,1,34,128):: CALL VCHAR(1,31,34,96):: 
+*FOR A=1 TO 50 :: CALL HCHAR(RN(RI+1),RN(RI)+4,34):: RI=(RI+1)AND 127 :: NEXT A
+
+L5180	LI R0,23
+		MOV R8,R1	* LOADS 1 - LI R1,1
+		LI R2,34
+		LI R3,64
+		BL @HCHAR
+		MOV R8,R0	* LOADS 1 - LI R0,1
+		BL @HCHAR	* CAN'T DO IT IN ONE HERE ;)
+		LI R3,24
+		BL @VCHAR	* can't even do the vchar in two!
+		INC R1
+		BL @VCHAR
+		LI R1,31
+		BL @VCHAR
+		INC R1
+		BL @VCHAR
+		
+		LI R4,50
+L51801	BL @GETRN
+		MOV R0,R1
+		AI R1,4
+		BL @GETRN
+		LI R2,34
+		BL @HCHAR1
+		DEC R4
+		JNE L51801
+
+*5190 CALL MAGNIFY(3):: R=12 :: C=16 :: CALL SPRITE(#1,36,5,R*8-11,C*8-11):: 
+*SC2=0 :: N=0 :: MX2=27 :: CALL HCHAR(R,C,32)
+
+L5190	LI R0,3
+		BL @MAGNIFY
+		LI R3,12
+		MOV R3,@R
+		LI R4,16
+		MOV R4,@C
+		MOV R8,R0	* LOADS 1 - LI R0,1
+		LI R1,36
+		LI R2,5
+		SLA R3,3
+		AI R3,-11
+		SLA R4,3
+		AI R4,-11
+		BL @SPRITE
+		CLR @SC2
+		CLR @N
+		LI R0,27
+		MOV R0,@MX2
+		MOV @R,R0
+		MOV @C,R1
+		LI R2,32
+		BL @HCHAR1
+
+* time delay sync - half here, half below!
+L5200	BL @SYNCDEL
+
+*5205 CALL JOYST(1,X,Y):: R=R-SGN(Y):: C=C+SGN(X):: CALL GCHAR(R,C,A):: 
+*CALL LOCATE(#1,R*8-11,C*8-11):: SC2=SC2+1 :: IF A<>32 THEN 5320
+
+L5205	MOV R8,R0	* LOADS 1 - LI R0,1
+		BL @JOYST
+		MOV R1,@X
+		MOV R2,@Y
+
+* if X and Y are both 0, do a syncdel to maintain framerate
+* otherwise we do it between the hchars so the lasers are visible!
+		MOV R1,R1
+		JNE L52001
+		MOV R2,R2
+		JNE L52001
+
+* But first, check for keyboard ESDX, to support non-joystick play
+* We just map the keys to joystick returns
+		CLR R0
+		BL @KEY
+		CI R1,69		* E
+		JNE L52051
+		CLR R1
+		LI R2,4
+		MOV R2,@Y
+		JMP L52001
+L52051	CI R1,88		* X
+		JNE L52052
+		CLR R1
+		LI R2,-4
+		MOV R2,@Y
+		JMP L52001
+L52052	CI R1,83		* S
+		JNE L52053
+		LI R1,-4
+		MOV R1,@X
+		CLR R2
+		JMP L52001
+L52053	CI R1,68		* D
+		JNE L52054
+		LI R1,4
+		MOV R1,@X
+		CLR R2
+		JMP L52001
+
+L52054	CLR R1			* not a valid key, so clear and do the sync anyway
+		CLR R2
+		BL @SYNCDEL
+		
+L52001	MOV R2,R0
+		BL @SGN
+		S R0,@R
+		MOV R1,R0
+		BL @SGN
+		A R0,@C
+		MOV @R,R0
+		MOv @C,R1
+		BL @GCHAR
+		MOV R2,@A
+		MOV R8,R0	* LOADS 1 - LI R0,1
+		MOV @R,R1
+		SLA R1,3
+		AI R1,-11
+		MOV @C,R2
+		SLA R2,3
+		AI R2,-11
+		BL @LOCATE
+		INC @SC2
+		MOV @A,R3
+		CI R3,32
+		JEQ L5210
+		B @L5320
+
+*5210 IF X=0 THEN 5230 ELSE IF X=4 AND C<30 THEN S=C+1 :: L=30-C :: 
+*CALL HCHAR(R,S,140,L):: CALL HCHAR(R,S,32,L):: GOTO 5250
+
+L5210	MOV @X,R0
+		JEQ L5230
+		CI R0,4
+		JNE L52101
+		MOV @C,R4
+		CI R4,30
+		JHE L52101
+		MOV R4,R1
+		INC R1
+		LI R3,30
+		S R4,R3
+		MOV @R,R0
+		LI R2,140
+		JMP L5225
+L52101
+
+*5220 IF X=-4 AND C>3 THEN L=C-3 :: CALL HCHAR(R,3,140,L):: 
+*CALL HCHAR(R,3,32,L):: GOTO 5250
+
+L5220	MOV @X,R0
+		CI R0,-4
+		JNE L52201
+		MOV @C,R4
+		CI R4,3
+		JLE L52201
+		MOV R4,R3
+		AI R3,-3
+		MOV @R,R0
+		LI R1,3
+		LI R2,140
+
+* COMMON HCHAR CODE
+L5225	BL @HCHAR
+		
+		BL @SYNCDEL
+		
+		LI R2,32
+		BL @HCHAR
+		JMP L5250
+	
+L52201
+
+*5230 IF Y=0 THEN 5250 ELSE IF Y=4 AND R>3 THEN L=R-3 :: 
+*CALL VCHAR(3,C,141,L):: CALL VCHAR(3,C,32,L):: GOTO 5250
+
+L5230	MOV @Y,R0
+		JEQ L5250
+		CI R0,4
+		JNE L52301
+		MOV @R,R4
+		CI R4,3
+		JLE L52301
+		MOV R4,R3
+		AI R3,-3
+		LI R0,3
+		MOV @C,R1
+		LI R2,141
+		JMP L5245
+L52301
+
+*5240 IF Y=-4 AND R<22 THEN S=R+1 :: L=22-R :: 
+*CALL VCHAR(S,C,141,L):: CALL VCHAR(S,C,32,L)
+
+L5240	MOV @Y,R0
+		CI R0,-4
+		JNE L52401
+		MOV @R,R4
+		CI R4,22
+		JHE L52401
+		MOV R4,R0
+		INC R0
+		LI R3,22
+		S R4,R3
+		MOV @C,R1
+		LI R2,141
+
+* COMMON VCHAR CODE
+L5245	BL @VCHAR
+		
+		BL @SYNCDEL
+		
+		LI R2,32
+		BL @VCHAR
+		
+L52401
+
+*5250 IF (SC2 AND 15)=0 THEN MX2=MX2-1 :: IF MX2=0 THEN MX2=27
+
+L5250	MOV @SC2,R0
+		ANDI R0,15
+		JNE L52501
+		DEC @MX2
+		JNE L52501
+
+* in MOTIF mode, we stay at this point till the zombie is dead, then
+* the wave is over, rather than wrap around
+		MOV @MOTIF,R0
+		JEQ L52502
+		INC @MX2		* Make it '1' again
+		JMP L52501
+	
+L52502	LI R0,27
+		MOV R0,@MX2
+L52501
+
+*5260 N=N+1 :: IF N>MX2 THEN N=1
+
+L5260	INC @N
+		C @N,@MX2
+		JLE L52601
+		MOV R8,R0	* LOADS 1 - LI R0,1
+		MOV R0,@N
+L52601
+
+*5270 CALL GCHAR(ZR(N),ZC(N),X):: IF X=32 OR X=34 THEN 5300 
+*ELSE TR=ZR(N):: TC=ZC(N):: CALL SOUND(-10,-7,5)
+
+L5270	LI R3,ZR
+		A @N,R3
+		CLR R0
+		MOVB *R3,R0
+		SWPB R0
+		LI R3,ZC
+		A @N,R3
+		CLR R1
+		MOVB *R3,R1
+		SWPB R1
+		BL @GCHAR
+		CI R2,32
+		JEQ L5300
+		CI R2,34
+		JEQ L5300
+		MOV R0,@TR
+		MOV R1,@TC
+		LI R0,-10
+		LI R1,-7
+		LI R2,5
+		BL @SOUND
+
+*5280 NR=TR+SGN(R-TR):: NC2=TC+SGN(C-TC):: CALL HCHAR(TR,TC,32):: CALL HCHAR(NR,NC2,58)::
+* CALL LOCATE(#N+1,NR*8-7,NC2*8-11)
+
+L5280	MOV @R,R0
+		S @TR,R0
+		BL @SGN
+		A @TR,R0
+		MOV R0,@NR
+		
+		MOV @C,R0
+		S @TC,R0
+		BL @SGN
+		A @TC,R0
+		MOV R0,@NC2
+		
+		MOV @TR,R0
+		MOV @TC,R1
+		LI R2,32
+		BL @HCHAR1
+		
+		MOV @NR,R0
+		MOV @NC2,R1
+		LI R2,58
+		BL @HCHAR1
+		
+		MOV R1,R2
+		SLA R2,3
+		AI R2,-11
+		MOV R0,R1
+		SLA R1,3
+		AI R1,-7
+		MOV @N,R0
+		INC R0
+		BL @LOCATE
+
+*5290 IF NR=R AND NC2=C THEN CALL SCREEN(2):: GOTO 5350 ELSE ZR(N)=NR :: ZC(N)=NC2 :: GOTO 5200
+
+L5290	C @NR,@R
+		JNE L52901
+		C @NC2,@C
+		JNE L52901
+		LI R0,2
+		BL @SCREEN
+		B @L5350
+
+L52901	LI R0,ZR
+		A @N,R0
+		MOV @NR,R1
+		SWPB R1
+		MOVB R1,*R0
+		
+		LI R0,ZC
+		A @N,R0
+		MOV @NC2,R1
+		SWPB R1
+		MOVB R1,*R0
+		
+		B @L5200
+		
+
+*5300 TR=RN(RI):: TC=RN(RI+1)+4 :: RI=(RI+2)AND 127 :: CALL GCHAR(TR,TC,X):: 
+*IF X<>32 THEN ZR(N)=1 :: GOTO 5200
+
+L5300	BL @GETRN
+		MOV R0,@TR
+		BL @GETRN
+		AI R0,4
+		MOV R0,@TC
+		MOV @TR,R0
+		MOV @TC,R1
+		BL @GCHAR
+		CI R2,32
+		JEQ L53001
+		LI R0,ZR
+		A @N,R0
+		LI R1,>0100
+		MOVB R1,@ZR
+		B @L5200
+L53001
+
+* in MOTIF mode, if MX2 is down to 1, then rather than bring out a
+* new zombie we declare the phase over and the player the winner
+		MOV @MX2,R0
+		C R0,R8		* cOMPARES 1 - CI R0,1
+		JNE L5310
+		MOV @MOTIF,R0
+		JEQ L5310
+		SETO R0		* MOTIF VICTORY!
+		B @RETURN
+
+*5310 CALL SOUND(-10,-5,4):: SC2=SC2+2 :: ZR(N)=TR :: ZC(N)=TC :: CALL HCHAR(TR,TC,58):: CALL *SPRITE(#N+1,40,9,TR*8-7,TC*8-11):: GOTO 5200
+
+L5310	LI R0,-10
+		LI R1,-5
+		LI R2,4
+		BL @SOUND
+		
+		INCT @SC2
+		LI R0,ZR
+		A @N,R0
+		MOV @TR,R1
+		SWPB R1
+		MOVB R1,*R0
+		LI R0,ZC
+		A @N,R0
+		MOV @TC,R1
+		SWPB R1
+		MOVB R1,*R0
+		MOV @TR,R0
+		MOV @TC,R1
+		LI R2,58
+		BL @HCHAR1
+		MOV R0,R3
+		SLA R3,3
+		AI R3,-7
+		MOV R1,R4
+		SLA R4,3
+		AI R4,-11
+		LI R2,9
+		LI 1,40
+		MOV @N,R0
+		INC R0
+		BL @SPRITE
+		B @L5200
+
+*5320 IF A<>34 THEN CALL SCREEN(2):: GOTO 5350
+
+L5320	MOV @A,R0
+		CI R0,34
+		JEQ L53201
+		LI R0,2
+		BL @SCREEN
+		JMP L5350
+L53201
+
+* Electric fence
+*5330 CALL PATTERN(#1,44):: FOR A=1 TO 12 :: CALL COLOR(1,11,1):: 
+*CALL COLOR(#1,12):: CALL SOUND(120,-3,6)
+
+L5330	MOV R8,R0	* LOADS 1 - LI R0,1
+		LI R1,44
+		BL @PATTERN
+		MOV R0,@A
+L53301	MOV R8,R0	* LOADS 1 - LI R0,1
+		LI R1,11
+		MOV R8,R2	* LOADS 1 - LI R2,1
+		BL @COLOR
+		LI R1,12
+		BL @SPCOLOR
+		LI R0,120
+		LI R1,-3
+		LI R2,6
+		BL @SOUND
+		
+* delay sound to slow it down
+		LI R2,32
+		BL @SOUND
+
+*5340 CALL COLOR(1,12,1):: CALL COLOR(#1,11):: CALL SOUND(120,-2,0):: NEXT A :: GOTO 5360
+
+L5340	MOV R8,R0	* LOADS 1 - LI R0,1
+		LI R1,12
+		MOV R8,R2	* LOADS 1 - LI R2,1
+		BL @COLOR
+		LI R1,11
+		BL @SPCOLOR
+		LI R0,120
+		LI R1,-2
+		LI R2,0
+		BL @SOUND
+
+* delay sound to slow it down
+		LI R2,32
+		BL @SOUND
+
+		INC @A
+		MOV @A,R0
+		CI R0,R13
+		JL L53301
+		JMP L5360
+
+* Zombie headmunch
+*5350 CALL PATTERN(#1,60):: FOR A=1 TO 12 :: CALL SOUND(10,110,30):: CALL HCHAR(R,C,59):: 
+*CALL SOUND(100,-7,0):: CALL HCHAR(R,C,58):: NEXT A
+
+L5350	MOV R8,R0	* LOADS 1 - LI R0,1
+		LI R1,60
+		BL @PATTERN
+		LI R4,17
+		MOV @R,R5
+		MOV @C,R6
+		
+L53501	LI R0,60
+		LI R1,110
+		LI R2,30
+		BL @SOUND
+		
+* delay sound to slow it down
+		BL @SOUND
+
+		MOV R5,R0
+		MOV R6,R1
+		LI R2,59
+		BL @HCHAR1
+		
+		LI R0,120
+		LI R1,-7
+		LI R2,0
+		BL @SOUND
+		
+* delay sound to slow it down
+		LI R2,30
+		BL @SOUND
+
+		MOV R5,R0
+		MOV R6,R1
+		LI R2,58
+		BL @HCHAR1
+		
+		DEC R4
+		JNE L53501
+
+*5360 CALL DELSPRITE(ALL):: CALL CLEAR :: CALL CHAR(32,""):: RESTORE 5090 :: 
+*ON ERROR 5370 :: FOR A=1 TO 99 :: READ C,D :: CALL COLOR(C,2,1):: NEXT A
+
+L5360	BL @POSTZB
+		
+* MOTIF - set R0 to 0 for died, and return
+		MOV @MOTIF,R0
+		JEQ L53602
+		CLR R0
+		B @RETURN
+L53602
+
+*5370 PRINT "OH NOES! YOU DIED!": :"YOUR SCORE WAS";SC2: :: GOSUB 5390 :: 
+*PRINT :"TRY AGAIN# ENTER Y OR N" :: ACCEPT SIZE(1)VALIDATE("YN"):A$
+*5380 IF A$<>"N" THEN 5160 ELSE CALL CLEAR :: END
+
+L5370	LI R0,OHNOES
+		LI R1,9
+		MOV R8,R2	* LOADS 1 - LI R2,1
+		BL @DISPLAY
+		LI R0,YOURSC
+		AI R1,3
+		BL @DISPLAY
+		MOV @SC2,R0
+		LI R2,16
+		BL @DISNUM
+		LI R0,L5390
+		BL @GOSUB
+		LI R0,TRYAGA
+		LI R1,22
+		MOV R8,R2	* LOADS 1 - LI R2,1
+		BL @DISPLAY
+L53701	BL @SYNCDEL
+		BL @WAITKEY
+		CI R1,89
+		JEQ L5380
+		CI R1,78
+		JNE L53701
+		BL @CLEAR
+		B @ENDCLR		* don't wait for a key
+L5380	B @L5160
+
+*5390 PRINT :: FOR A=0 TO 6 :: PRINT TAB(11);F$(A):: NEXT A :: PRINT :: 
+*CALL SCREEN(3):: RETURN
+*5110 CALL CHAR(91,""):: FOR A=0 TO 6 :: FOR B=0 TO 6 :: 
+* F$(A)=F$(A)&CHR$(A*7+B+91):: NEXT B :: NEXT A
+
+* Draw the farmer character 
+L5390	LI R0,STRBUF
+		LI R1,14
+		LI R2,11
+		LI R3,>5B00
+		CLR R4
+L53901	CLR R5
+		LI R6,STRBUF
+L53902	MOVB R3,*R6+
+		AI R3,>0100
+		INC R5
+		CI R5,7
+		JL L53902
+		LI R5,>2B00
+		MOVB R5,*R6+
+		BL @DISPLAY
+		INC R1
+		INC R4
+		CI R4,7
+		JL L53901
+		LI R0,3
+		BL @SCREEN
+		B @RETURN
+
+* SUPPORT TO REPLACE RN WHICH WAS A RND NUMBER FROM 1-24 (it was just a speedup for XB)
+* RETURN IN R0
+GETRN	MOV R11,R10
+		BL @RND
+		ANDI R0,31
+		JEQ GETRN0
+GETRN1	CI R0,24
+		JL GETRN2
+		AI R0,-24
+		JEQ GETRN0
+		JMP GETRN1
+GETRN0	INC R0
+GETRN2	B *R10
+
+* Sync with vblank, slow down game, and count down sound
+SYNCDEL	LI R13,5			* number of frames to delay
+SYNC1	MOV @>8802,R12		* VDP STATUS
+		ANDI R12,>8000
+		JEQ SYNC1
+		MOV @SNDDEL,R12		* check sound timer
+		JEQ SYNC3
+		DEC @SNDDEL			* count down
+		JNE SYNC2
+SYNC3	LI R12,>9FFF		* mute all sound (we only use 2 channels)
+		MOVB R12,@>8400
+		SWPB R12
+		MOVB R12,@>8400
+SYNC2	DEC R13				* one frame done
+		JNE SYNC1			
+		B *R11
+		
+* Stop sounds, clear screen and sprites, reset colors
+* uses r0,r1,r2,r4
+POSTZB	MOV R11,R4			* SAVE RETURN
+
+		BL @DSPRALL
+		BL @CLEAR
+		
+* Stop all sound, please
+		LI R1,>9FBF
+		MOVB R1,@>8400
+		SWPB R1
+		MOVB R1,@>8400
+		LI R1,>DFFF
+		MOVB R1,@>8400
+		SWPB R1
+		MOVB R1,@>8400
+		CLR @SNDDEL
+
+* RESET COLORS
+		MOV R8,R0	* LOADS 1 - LI R0,1			* bugfix, just color sets 1-14
+		LI R1,2
+		MOV R8,R2	* LOADS 1 - LI R2,1
+L53601	BL @COLOR
+		INC R0
+		CI R0,15
+		JNE L53601
+		
+		B *R4
+		
+**********************************
+* Zombie MOTIF - concept by Owen *
+* Coded by Tursi                 *
+**********************************
+MOT1	TEXT 'ZOMBIE+'
+		EVEN
+MOT2	TEXT 'ZOMBIE MCOWEN@S TI FARM+'
+		EVEN
+MOT3	BYTE 29,31,32,32,29,31,29,30,30,31,29,30,30,31,29,31,29,30,30,31,43
+		EVEN
+MOT4	BYTE 142,31,31,29,142,30,142,142,142,30,142,142,142,28,142,30,142,142,142,28,43
+		EVEN
+MOT5	BYTE 142,142,31,142,142,30,142,30,142,30,32,142,30,32,142,30,142,31,31,43
+		EVEN
+MOT6	BYTE 142,30,142,28,142,30,142,30,142,30,32,142,30,32,142,30,142,142,28,43
+		EVEN
+MOT7	BYTE 142,30,32,32,142,30,142,31,142,30,32,142,30,32,142,30,142,30,43
+		EVEN
+MOT8	BYTE 142,28,32,32,142,28,142,142,142,28,32,142,28,32,142,28,142,28,43
+		EVEN
+MOT9	TEXT 'BY CODEXQ TURSIQ AND OWEN!+'
+		EVEN
+WANDER	TEXT 'ZOMBIES WANDERED INTO FIELD X!+'
+		EVEN
+WAND1	TEXT 'GRAB YOUR LASER RIFLEQ AND+'
+		EVEN
+WAND2	TEXT 'SHOW THEM VARMINTS WHAT FOR!+'
+		EVEN
+WAND3	TEXT 'WATCH OUT FOR THE+'
+		EVEN
+WAND4 	TEXT 'ELECTRIC FENCE!+'
+		EVEN
+FARMR1	TEXT 'FARMER  MCOWEN+'
+		EVEN
+FARMR2	TEXT 'KATIE  SUE+'
+		EVEN
+FARMR3	TEXT 'SLIM  BUCK+'
+		EVEN
+FARMR4	TEXT 'FAT  ROY+'
+		EVEN
+FARMR5	TEXT 'L@IL REX+'
+		EVEN
+* theses next 3 show in TI Farmer so have no char restrictions
+ZBOK	TEXT 'ZOMBIES DRIVEN OFF!+'
+		EVEN
+ZBBAD	TEXT 'ZOMBIES FOULED QUAD+'
+		EVEN
+ZBWORT	TEXT 'ZOMBIES FOULED WHOLE FIELD!+'
+		EVEN
+RIPTXT	TEXT 'R I P+'
+		EVEN
+WELCOM	TEXT 'WELCOME BACK+'
+		EVEN
+		
+GRAVE1	BYTE 0,1,43
+GRAVE2	BYTE 2,3,4,43
+GRAVE3	BYTE 5,6,7,43
+GRAVE4	BYTE 8,9,10,43
+GRAVE5	BYTE 11,12,13,14,43
+GRAVE6	BYTE 32,15,16,17,43
+
+HAND1	BYTE 0,1,43
+HAND2	BYTE 2,3,4,43
+HAND3	BYTE 5,6,7,18,19,43
+HAND4	BYTE 8,9,10,20,21,43
+HAND5	BYTE 11,12,13,22,23,43
+HAND6	BYTE 32,15,16,24,25,43
+HAND7	BYTE 32,32,32,26,27,43
+
+FARMHN	DATA 7,FARMR1
+		DATA 9,FARMR2
+		DATA 9,FARMR3
+		DATA 10,FARMR4
+		DATA 10,FARMR5
+
+MOTIT	DATA 2,12,MOT1
+		DATA 11,3,MOT2
+		DATA 23,2,MOT9
+		DATA 0
+
+WARNSC	DATA 6,0,WANDER
+		DATA 12,2,WAND1
+		DATA 13,1,WAND2
+		DATA 18,6,WAND3
+		DATA 19,7,WAND4
+		DATA 0
+		
+MOTTIT	DATA 4,5,MOT3,MOT4,MOT5,MOT6,MOT7,MOT8,0
+GRVTIT	DATA 6,12,GRAVE1,GRAVE2,GRAVE3,GRAVE4,GRAVE5,GRAVE6,0
+HNDTIT	DATA 6,12,HAND1,HAND2,HAND3,HAND4,HAND5,HAND6,HAND7,0
+
+* START AT 36 ($ FOR MOTIF GAME OVER)
+CHARSJ	DATA >0038,>5450,>3814,>5438
+
+* ENDS WITH 1,0 SO WE WRITE AN EVEN NUMBER OF ADDRESS BYTES, AND 0 ENDS IT
+TIFREG	BYTE >41,>83,>03,>84,>01,>87,>C0,>81,1,0
+ZBXREG	BYTE >40,>83,>01,>84,>03,>87,1,0
+
+* This mode just combines the other two modes, actually ;)
+GOMOTIF	
+* easter egg for 32k cart only
+*    LI R0,>0500
+*    MOVB R0,@>8374
+*    LWPI >83E0
+*    BL @>000E
+*    MOVB @>8375,R0
+*    CI R0,>4100
+*    JNE NOEGG
+*    LI R0,YESEGG
+*    LI R1,>8300
+*    MOV *R0+,*R1+
+*    MOV *R0+,*R1+
+*    MOV *R0+,*R1+
+*    MOV *R0+,*R1+
+*    B @>8300
+*YESEGG
+*    MOV R0,@>6000
+*	  B @>6056
+*NOEGG
+
+* end of easter egg
+    SETO @MOTIF		* IS running MOTIF mode
+		SETO @MODE		* zombxb mode
+		BL @GOGO		* init
+		BL @INITVDP
+		LI R15,STACK
+		
+* First, initialize ZomBXB. We turn off the screen so you don't see the title page
+* flash up briefly
+		LI R12,>8180	* 16k, screen off, ints off 
+		BL @WRADR
+		LI R0,L5100		* entry point for ZomBXB
+		BL @GOSUB
+
+* Before we turn the screen back on, clear it and all sprites
+		BL @POSTZB
+		LI R12,>81C0	* 16k, screen on, ints off 
+		BL @WRADR
+		
+* display a new title page here. Use the ZBXB settings 
+		LI R3,MOTIT
+		BL @SHWTIT
+		LI R3,MOTTIT
+		BL @DRAWGV
+		LI R0,L5390		* DRAW FARMER
+		BL @GOSUB
+
+* WAIT FOR A NEW KEYPRESS		
+TITL2	BL @WAITKEY
+
+* Prepare for TI Farmer, he'll return when it's time for us to do something (with a code in R0)
+		BL @CLEAR
+		LI R0,L100		* outside the loop on purpose
+MAINLP	CLR @MODE		* TI Farmer Mode
+
+* Restore TI Farmer screen and mode
+		LI R3,TIFREG
+TIF1	MOVB *R3+,@>8C02
+		JNE TIF1
+
+* Now branch into TI Farmer	
+		BL @GOSUB
+		
+* Either it's game over (R0 = 0), or we have to blast some zombies (R0<>0)
+		MOV R0,R0
+		JNE NOTOVR
+		B @GAMOVR
+NOTOVR
+		MOV @ZMQUAD,R0	* get current randomish quad
+		ANDI R0,>0003
+		INC R0
+		MOV R0,@QUAD	* save quad
+
+* Save off the screen since it's the only field state we have
+		BL @SAVESCR
+		
+* do a slow clear as a transition - not much ROM left to get fancy with
+		MOV R8,R0	* LOADS 1 - LI R0,1
+		MOV R0,R1
+		LI R2,32
+		MOV R0,R3
+CLR1	BL @vCHAR
+		INC R3
+		CI R3,25
+		JNE CLR1
+		MOV R0,R3
+		INC R1
+		CI R1,33
+		JNE CLR1
+		
+* Set up the ZomBXB tables
+		LI R3,ZBXREG
+ZBX1	MOVB *R3+,@>8C02
+		JNE ZBX1
+
+* Put up some intro text here
+		LI R3,WARNSC	* SHOW THE STATIC TEXT
+		BL @SHWTIT
+		
+		MOV @QUAD,R4
+		AI R4,48		* make a number 1-4
+		MOV @WARNSC,R0	* take row from screen table
+		LI R1,30
+		MOV R4,R2
+		BL @HCHAR1		* display correct field quad
+		LI R1,10
+		BL @SHWHND		* show farmhand name
+		
+* WAIT FOR A NEW KEYPRESS		
+TITL3	BL @WAITKEY
+
+* Call into ZomBXB
+		SETO @MODE		* ZomBXB mode
+		LI R0,L5160
+		BL @GOSUB
+		MOV R0,R5		* save R0
+		
+* Delete all sprites and fix colors 
+		BL @POSTZB
+		
+* Now either he died (R5=0), or lived (R5<>0)
+		MOV R5,R5
+		JEQ	MDIED
+		
+* Here we lived! no damage!
+		LI R0,ZBOK
+		MOV R0,@MX		* TI FARMER STATUS MESSAGE
+		LI R1,12
+		LI R2,7
+		BL @DISPLAY
+
+* 5 second delay
+		LI R0,5000
+		BL @SNDDLY
+		
+		CLR @QUAD
+		CLR @ZQS
+		JMP MRSUME
+
+* Here we died! Oh noes!
+MDIED	LI R0,3
+		BL @SCREEN
+		LI R0,RIPTXT
+		LI R1,16
+		LI R2,12
+		BL @DISPLAY
+		LI R1,18
+		BL @SHWHND
+		LI R3,GRVTIT
+		BL @DRAWGV
+
+* WAIT FOR KEYPRESS
+MDIED1	BL @WAITKEY
+
+		LI R0,ZBBAD
+		MOV R0,@MX
+		
+		MOV @QUAD,R0	* SAVE DAMAGED AREA
+		DEC R0
+		SLA R0,1
+		LI R2,FS/2
+		MOV R2,@ZQS
+		LI R1,QX
+		A R0,R1
+		MOV *R1,@ZQC
+		LI R1,QY
+		A R0,R1
+		MOV *R1,@ZQR
+		
+		DEC @FM
+		JNE MRSUME
+		
+* oops, no farmhands to delete, it was Owen!
+		INC @FM
+
+* draw the hand popping up!
+* flash the screen and play a crash for added effect!
+		LI R0,WELCOM
+		LI R1,16
+		LI R2,8
+		BL @DISPLAY
+
+		LI R0,15
+		BL @SCREEN
+		
+		LI R3,HNDTIT
+		BL @DRAWGV
+		
+		LI R0,512
+		LI R1,-7
+		LI R2,0
+		BL @SOUND
+		
+CRSH1	LI R0,256
+		INCT R2
+		CI R2,32
+		JEQ CRSH2
+		BL @SOUND
+		LI R0,3
+		BL @SCREEN
+		JMP CRSH1
+CRSH2
+
+* force a delay
+		LI R0,7000
+		BL @SNDDLY
+		
+		LI R0,ZBWORT
+		MOV R0,@MX
+		
+* MAKE SURE NO LINGERING SOUNDS
+		BL @POSTZB
+		
+* update the quads to the whole field
+		LI R0,FS
+		MOV R0,@ZQS
+		MOV @QX,@ZQC
+		MOV @QY,@ZQR
+		CLR @QUAD
+
+* Now back into the farm sim
+MRSUME	LI R12,>8180	* 16k, screen off, ints off 
+		BL @WRADR
+		BL @RESTSCR
+
+* Request an update of the screen
+		LI R0,L800
+		BL @GOSUB
+
+* destroy field as specified in ZQR,ZQC
+* plot 16 holes, but limit to the field
+		MOV @ZQS,R0
+		JEQ PLOT3
+		LI R4,16
+		LI R2,133
+PLOT1	BL @RND
+		MOV R0,R1
+		ANDI R0,>000F
+		SRA R1,4
+		ANDI R1,>000F
+		C R0,@ZQS
+		JHE PLOT2
+		C R1,@ZQS
+		JHE PLOT2
+		A @ZQR,R0
+		A @ZQC,R1
+		BL @HCHAR1
+PLOT2	DEC R4
+		JNE PLOT1
+PLOT3
+			
+* Continue the game			
+		LI R0,L200
+		B  @MAINLP
+		
+* TI Farmer is complete		
+GAMOVR	
+* Set up the ZomBXB tables
+		LI R3,ZBXREG
+GAMO1	MOVB *R3+,@>8C02
+		JNE GAMO1
+		
+* fix $
+		SETO @MODE			* ZOMBXB MODE
+		LI R0,36
+		LI R1,CHARSJ
+		LI R2,8
+		BL @CHAR
+
+* Get score onscreen
+		LI R0,L270_2
+		BL @GOSUB
+		
+* pop up the farmer
+		LI R0,L5390
+		BL @GOSUB
+		
+* sleep for a sec
+		LI R0,5000/60
+		MOV R0,@SNDDEL
+SLP1	BL @SYNCDEL
+		MOV @SNDDEL,R0
+		JNE SLP1
+		
+* that's all for now
+		B @END
+		
+* SHOW A TITLE SCREEN TABLE - ROW,COL,TEXT, UNTIL ROW=0
+* R3 = ADDRESS, USES R0,R1,R2,R4
+SHWTIT	MOV R11,R4
+SHW1	MOV *R3+,R1
+		JEQ SHW2
+		MOV *R3+,R2
+		MOV *R3+,R0
+		BL @DISPLAY
+		JMP SHW1
+SHW2	B *R4
+
+* Draw the farmhand name centered at row r1 (uses R0 and R2 and R3)
+SHWHND	MOV R11,R3
+		MOV @FM,R0		* Display correct farmhand name
+		DEC R0
+		SLA R0,2
+		AI R0,FARMHN
+		MOV *R0+,R2
+		MOV *R0,R0
+		BL @DISPLAY
+		B *R3
+		
+* Draw a grave image pointed to by R3. Uses R0,r1,r2,r4
+DRAWGV	MOV R11,R4
+		MOV *R3+,R1
+		MOV *R3+,R2
+DRAWG1	MOV *R3+,R0
+		JEQ DRAWG2
+		BL @DISPLAY
+		INC R1
+		JMP DRAWG1
+DRAWG2	B *R4
+
+**********************************
+* Extended BASIC Porting support *
+* by Tursi                       *
+**********************************
+
+* error texts - "stack check" - search for that to find enable code
+*STKOVR	TEXT 'STACK OVERFLOW+'
+*		EVEN
+*STKUNR	TEXT 'STACK UNDERFLOW+'
+*		EVEN
+		
+******************************************
+* System setup in case of cartridge load *
+* uses a lot of registers, call it first *
+******************************************
+* Load lower case charsets *
+****************************
+* note: 99/4 support removed
+* (Not that it matters, 99/4 doesn't support ROM carts!)
+
+GOGO
+* this is the first code that always runs, so some basic setup
+		LIMI 0				* disable interrupts
+		MOV R11,@>8316		* move R11 to correct workspace
+		LWPI >8300			* set correct workspace
+		LI R8,1				* finally, we reserve R8 to always be the value '1' to save some memory
+
+ MOV R11,R9   * Save our return spot
+ LI R3,7	  * number of bytes per char in the grom
+
+IS4A
+* 'lowercase' letters
+ LI R0,>004A  * GPL vector address (not available for 99/4)
+ LI R1,>4B00  * dest in VDP - must OR with >4000 for write
+ LI R2,>001F  * how many chars
+ BL @GPLVDP   * this function goes somewhere later in your ROM
+
+* do it again for the other character set
+ LI R0,>004A  * GPL vector address (not available for 99/4)
+ LI R1,>5B00  * dest in VDP - must OR with >4000 for write
+ LI R2,>001F  * how many chars
+ BL @GPLVDP   * this function goes somewhere later in your ROM
+
+* main set
+MNSET
+ LI R0,>0018  * GPL vector address
+ LI R1,>4900  * dest in VDP - must OR with >4000 for write
+ LI R2,>0040  * how many chars
+ BL @GPLVDP   * this function goes somewhere later in your ROM
+
+* and, do it again for the other character set
+ LI R0,>0018  * GPL vector address
+ LI R1,>5900  * dest in VDP - must OR with >4000 for write
+ LI R2,>0040  * how many chars
+ BL @GPLVDP   * this function goes somewhere later in your ROM
+
+ B *R9        * RETURN TO CALLER
+
+*****************
+* GROM routines *
+*****************
+
+* Set GROM address
+GPLSET
+ MOVB R0,@>9C02
+ SWPB R0
+ MOVB R0,@>9C02
+ B *R11
+
+* Get a word from GPL
+GETGPL
+ MOVB @>9800,R0
+ SWPB R0
+ MOVB @>9800,R0
+ SWPB R0
+ B *R11
+
+* Copy R2 characters from a GPL copy function vectored at
+* R0 to VDP R1. GPL vector must be a B or BR and
+* the first actual instruction must be a DEST with an
+* immediate operand. Set R3 to 6 for 99/4 (6 byte characters)
+* or 7 for a 99/4A (7 byte characters)
+GPLVDP
+ MOV R11,R10    * save return address
+ BL @GPLSET     * set GROM address
+ BL @GETGPL     * Get branch instruction (not verified!)
+ ANDI R0,>1FFF  * mask out instruction part
+ AI R0,3        * skip instruction and destination
+ BL @GPLSET     * set new GROM address
+ BL @GETGPL     * get actual address of the table
+ BL @GPLSET     * and set that GROM address - GROM is now ready!
+
+ MOV R1,R12
+ BL @WRADR
+
+ CLR R0
+LP8
+ MOVB R0,@>8C00 * pad the top of the char with a space
+ MOV R3,R0      * then copy 7 (or 6) bytes
+
+LP9
+ MOVB @>9800,@>8C00  * copy a byte (both sides autoincrement)
+ DEC R0
+ JNE LP9
+
+ DEC R2         * next character
+ JNE LP8
+
+ B *R10
+
+* VDP support for the XB functions
+
+* Set GR0 mode similar to XB (this inits registers for TI Farmer)
+INITVDP	MOV R11,R14
+		LI R12,>8000	* non-bitmap mode, ext video off
+		BL @WRADR
+		LI R12,>81C0	* 16k, screen on, ints off (differs from XB)
+		BL @WRADR
+		LI R12,>8200	* SDT at >0000
+		BL @WRADR
+		LI R12,>8341	* different from XB - CT at >1040
+		BL @WRADR
+		LI R12,>8403	* different from XB - PDT at >1800
+		BL @WRADR
+		LI R12,>8506	* SAT at >0300
+		BL @WRADR
+		LI R12,>8601	* different from XB - SPT at >0800
+		BL @WRADR
+		LI R12,>8701	* transparent on color 1
+		BL @WRADR
+* If we are in ZomBXB mode, we'll set the right PDT and CT, but those will
+* eventually be changed dynamically anyway
+		MOV @MODE,@MODE
+		JEQ INITV1
+		LI R12,>8340	* different from XB - CT at >1000
+		BL @WRADR
+		LI R12,>8401	* different from XB - PDT at >0800
+		BL @WRADR
+INITV1
+* we won't call CLEAR, user can do that, but we do
+* need to wipe the sprite table
+		LI R12,>4300
+		BL @WRADR
+		LI R12,>D000
+		LI R13,128
+		BL @VDPSET
+* and set the moved color tables to all black on trans
+		LI R12,>5000
+		BL @WRADR
+		LI R12,>1000
+		LI R13,96		* two color tables, not touching but no harm to erase the data between them
+		BL @VDPSET
+* set our random number seed (note always the same sequence, so scramble manually)
+		MOV R8,R0	* LOADS 1 - LI R0,1
+		MOV R0,@RNDSED
+		CLR @SNDDEL			* AND CLEAR ANY SOUND DELAY COUNTER
+		B *R14
+
+* write address - R12 has word ready to write with tags
+WRADR	SWPB R12
+		MOVB R12,@>8C02
+		SWPB R12
+		MOVB R12,@>8C02
+		B *R11
+		
+* write byte in R12 MSB R13 times to VDP
+VDPSET	MOVB R12,@>8C00
+		DEC R13
+		JNE VDPSET
+		B *R11
+
+* XB-LIKE FUNCTIONS - REGS 0+ FOR INPUTS, BL TO CALL
+* MUST PRESERVE REGS, BUT CAN USE R10,R12-R14
+
+* Screen - R0 = color+1
+SCREEN 	MOV R0,R12
+		DEC R12
+		ORI R12,>8700
+		JMP WRADR
+		
+CLEAR	LI R12,>4000
+		MOV R11,R14
+		BL @WRADR
+		LI R12,>2000
+		LI R13,768
+		BL @VDPSET
+		B *R14
+		
+* COLOR	0-SET-3,1=COL+1,2=BG COL+1
+COLOR	MOV R11,R14
+		MOV R0,R12
+		AI R12,3		* from XB sets to VDP sets
+		ORI R12,>5000
+		MOV @MODE,@MODE	* test game mode
+		JNE COLOR1
+		AI R12,>0040	* use the TI Farmer color table
+COLOR1	BL @WRADR
+		MOV R1,R12
+		DEC R12
+		SLA R12,4
+		MOV R2,R13
+		DEC R13
+		A R13,R12
+		SWPB R12
+		MOVB R12,@>8C00
+		B *R14
+		
+*CLRLIN		0 = text line to clear (not XB, but simplifies my life ;) )
+CLRLIN	MOV R11,R14
+		MOV R0,R12
+		DEC R12
+		SLA R12,5
+		INC R12
+		ORI R12,>4000
+		BL @WRADR
+		LI R12,>2000	* >20 is ascii 32, space
+		LI R13,28		* 28 characters across for print area
+CLRLN1	MOVB R12,@>8C00
+		DEC R13
+		JNE CLRLN1
+		B *R14
+
+*DISPLAY	0=STRING (+ TERMINATED),1=ROW+1,2=COL-1 (28 col print)
+DISPLAY	MOV R11,R14
+		MOV R1,R12
+		DEC R12
+		SLA R12,5
+		A R2,R12
+		INC R12
+		ORI R12,>4000
+		BL @WRADR
+		MOV R0,R12
+		CLR R13
+DSLP1	MOVB *R12+,R13
+		CI R13,>2B00
+		JEQ DSEXIT
+		MOVB R13,@>8C00
+		JMP DSLP1
+DSEXIT	B *R14
+
+*DISNUM	0=NUMBER TO PRINT,1=ROW+1,2=COL-1 (28 col print)
+DISNUM	MOV R11,R14
+		MOV R1,R12
+		DEC R12
+		SLA R12,5
+		A R2,R12
+		INC R12
+		ORI R12,>4000
+		BL @WRADR
+		CLR R10			* Use as flag
+		MOV R0,R13
+		CLR R12			* prepare for DIV
+		LI R11,10000	* we can use R11 now ;)
+		DIV R11,R12		* R12=result, R13=remainder
+		MOV R12,R12
+		JEQ SKIP01
+		AI R12,48
+		SWPB R12
+		MOVB R12,@>8C00
+		SETO R10		* don't need to test on the first digit
+SKIP01	LI R11,1000
+		CLR R12
+		DIV R11,R12
+		MOV R12,R12
+		JNE NSKP1
+		MOV R10,R10
+		JEQ SKIP02
+NSKP1	AI R12,48
+		SWPB R12
+		MOVB R12,@>8C00
+		SETO R10
+SKIP02	LI R11,100
+		CLR R12
+		DIV R11,R12
+		MOV R12,R12
+		JNE NSKP2
+		MOV R10,R10
+		JEQ SKIP03
+NSKP2	AI R12,48
+		SWPB R12
+		MOVB R12,@>8C00
+		SETO R10
+SKIP03	LI R11,10
+		CLR R12
+		DIV R11,R12
+		MOV R12,R12
+		JNE NSKP3
+		MOV R10,R10
+		JEQ SKIP04
+NSKP3	AI R12,48
+		SWPB R12
+		MOVB R12,@>8C00
+		SETO R10
+SKIP04	AI R13,48		* always print the last digit
+		SWPB R13
+		MOVB R13,@>8C00
+		B *R14
+		
+*GOSUB	R0=ADDRESS,R11=RETURN,R15=STACK POINTER (counts up)
+GOSUB	
+* STACK CHECK CODE
+*		CI R15,ENDSTK
+*		JNE GOSOK
+*		LI R0,STKOVR
+*BADSTK	CLR R1
+*		INC R1
+*		MOV R1,R2
+*		BL @DISPLAY
+*INFLP	LIMI 2
+*		JMP INFLP
+GOSOK	MOV R11,*R15+
+		B *R0
+
+*RETURN	Undo the same (called with B)
+RETURN	
+* STACK CHECK CODE
+*		CI R15,STACK
+*		JNE RETOK
+*		LI R0,STKUNR
+*		JMP BADSTK
+RETOK	DECT R15
+		MOV *R15,R12
+		B *R12
+
+*CHAR	R0=CHAR,R1=ADDRESS OF BYTES, R2=NUMBER OF BYTES
+CHAR	MOV R11,R14
+		MOV R0,R12
+		SLA R12,3
+		AI R12,>4800
+		MOV @MODE,@MODE	* test game mode
+		JNE CHAR1
+		AI R12,>1000	* use TI Farmer char table
+CHAR1	BL @WRADR
+		MOV R1,R12
+		MOV R2,R13
+		MOV R14,R11		* make the below reusable
+* VDP Copy - source in R12, count in R13, VDP already set
+VDPCPY	MOVB *R12+,@>8C00
+		DEC R13
+		JNE VDPCPY
+		B *R11
+		
+*HCHAR1 0,1,2 - single character hchar wrapper
+HCHAR1	MOV R8,R3	* LOADS 1 - LI R3,1
+* fall through into hchar
+
+*HCHAR	0,1,2,3 (ALL EXCEPT 2 and 3 ARE +1)
+HCHAR	MOV R11,R14
+		MOV R0,R12
+		DEC R12
+		SLA R12,5
+		A R1,R12
+		DEC R12
+		ORI R12,>4000
+		BL @WRADR
+		MOV R2,R12
+		SWPB R12
+		MOV R3,R13
+		BL @VDPSET
+		B *R14
+
+*GCHAR	0=ROW,1=COL, RETURN IN 2
+GCHAR	MOV R11,R14
+		MOV R0,R12
+		DEC R12
+		SLA R12,5
+		A R1,R12
+		DEC R12		* read mode this time
+		BL @WRADR
+		CLR R2
+		MOVB @>8800,R2
+		SWPB R2
+		B *R14
+		
+*KEY		0 - MODE, RETURN 1=K,2=S
+* only supports 0 (ASCII keyboard), 1 (joystick 1 fire) and 2 (joystick 2 fire)
+* Warning: no debounce - that may be a problem on real hardware
+* also checks for QUIT key (adapted from TI Intern/console ROM)
+* also updates random number seed
+*
+* Note: to save space in this program, joystick fire buttons 
+* are disabled. We don't need them anyway.
+KEY		MOV R11,R14			* save return address
+		MOV R0,R1			* save mode (RND corrupts R0)
+		BL @RND				* scramble random number
+		LI R12,>0024 		* Load CRU
+		CLR R13				* column select
+		LDCR R13,3
+		SRC R12,7			* Delay?
+		LI 12,>0006
+		STCR R13,8 			* Fetch CRU
+		LI R11,>1100		* match value for QUIT
+		CZC R11,R13 		* QUIT keys?
+		JNE KEYNQ
+		JMP ENDCLR	 		* reset safely
+KEYNQ	MOV R1,R1
+		JEQ MODE0
+*		CI R1,1
+*		JNE KNOT1
+*		LI R10,6 			* address for joystick 1 fire column 
+*		JMP JOYBUT
+*KNOT1	CI R1,2
+*		JNE KNOT2
+*		LI R10,7 			* address for joystick 2 fire column
+*		JMP JOYBUT
+KNOT2	B *R14				* invalid mode, ignore
+*JOYBUT	LI R12,>0024
+*		LDCR R10,3
+*		LI R12,>0006
+*		SETO R13
+*		STCR R13,1			* just the one bit
+*		INV R13
+*		JEQ NOTKEY
+*		LI R1,18
+*		JMP KSTATS
+		
+MODE0	CLR R10
+KEYLP1	LI R12,>0024		* column select
+		LDCR R10,3
+		LI R12,>0006		* row select
+		CLR R13				* so that the other byte will be zeroed
+		STCR R13,8			* pressed keys are '0' bits
+		CLR R11
+		SWPB R13
+KSHIFT	SRL R13,1
+		JNC KFND
+		INC R11
+		JMP KSHIFT
+KFND	CI R11,8			* check for overflow (no key)
+		JL GOTKEY
+		AI R10,>0100		* next column
+		CI R10,>0600
+		JNE KEYLP1
+NOTKEY	LI R1,>00FF			* no key
+		CLR R2
+		CLR @OLDKEY
+		B *R14
+GOTKEY	LI R13,KEYMAP
+		SWPB R10
+		SLA R10,3
+		A R10,R13
+		A R11,R13
+		CLR R1
+		MOVB *R13,R1		* ASCII code
+		SWPB R1
+KSTATS	MOV R8,R2	* LOADS 1 - LI R2,1				* key pressed
+		C R1,@OLDKEY
+		JNE NOSAME
+		NEG R2
+NOSAME	MOV R1,@OLDKEY
+		B *R14
+		
+*RND		RETURN RANDOM NUMBER IN R0 
+RMASK	DATA >B400				* mask for 16 bit random numbers
+RND		MOV  @RNDSED,R0         * Get seed
+		SRL  R0,1				* shift down
+		JNC  RAND01				* jump if 1 not shifted out
+		XOR  @RMASK,R0			* XOR the top half
+RAND01	MOV  R0,@RNDSED         * Save this number for next time 
+		INC  @ZMQUAD			* next zombie quad (since this is always called)
+		B    *R11 
+
+*END		WAIT FOR KEYPRESS, THEN REBOOT CONSOLE, CLEARING SCRATCHPAD
+END		BL @WAITKEY
+
+ENDCLR	LI R0,>83FE				* clear scratchpad to prevent reset crashes
+ENDCL1	CLR *R0					* probably only need to clear the user interrupt
+		DECT R0					* but this is fine ;)
+		CI R0,>8300
+		JNE ENDCL1
+		BLWP @>0000				* ( yeah, it's okay to leave R0 )
+		
+* By columns, then rows. 8 Rows per column. No shift states
+KEYMAP	BYTE 61,32,13,255,1,2,3,255
+		TEXT '.LO92SWX'
+		TEXT ',KI83DEC'
+		TEXT 'MJU74FRV'
+		TEXT 'NHY65GTB'
+		TEXT '/;P01AQZ'
+		EVEN
+
+* MAGNIFY	R0=SIZE
+MAGNIFY	MOV R11,R14
+		MOV R0,R13
+		DEC R13
+		LI R12,>81C0		* DEFAULT VDPREG 1
+		ANDI R13,>0003
+		SOC R13,R12
+		BL @WRADR
+		B *R14
+
+* DSPRALL	DELETES ALL SPRITES
+DSPRALL	MOV R11,R14
+		LI R12,>4300
+		BL @WRADR
+		LI R12,>C000
+		LI R13,128
+		BL @VDPSET
+		B *R14
+
+* vCHAR	0,1,2,3 (ALL EXCEPT 2 and 3 ARE +1)
+vCHAR	MOV R11,R14
+		MOV R0,R12
+		DEC R12
+		SLA R12,5
+		A R1,R12
+		DEC R12
+		MOV R3,R13
+		ORI R12,>4000
+		SWPB R2
+VCHAR1	BL @WRADR
+		MOVB R2,@>8C00
+		AI R12,32
+		DEC R13
+		JNE VCHAR1
+		SWPB R2
+		B *R14
+
+* JOYST 	R0=JOYSTICK (1/2), X IN R1, Y IN R2
+* Also checks for FCTN-= QUIT (disabled for ROM space - game calls KEY too now)
+JOYST	
+*		LI R12,>0024 		* Load CRU
+*		CLR R13				* column select
+*		LDCR R13,3
+*		SRC R12,7			* Delay?
+*		LI 12,>0006
+*		STCR R13,8 			* Fetch CRU
+*		LI R14,>1100		* match value for QUIT
+*		CZC R14,R13 		* QUIT keys?
+*		JNE JOYNQ
+*		JMP ENDCLR	 		* reset safely
+JOYNQ	LI R12,>0024 		* Load CRU
+		LI R13,5
+		A R0,R13			* COLUMN 6 OR 7
+		SWPB R13
+		LDCR R13,3
+		SRC R12,7			* Delay?
+		LI R12,>0006
+		CLR R13
+		STCR R13,8 			* Fetch CRU
+		CLR R1
+		CLR R2
+		LI R12,>0200		* LEFT
+		COC R12,R13
+		JEQ JOYST1
+		LI R1,-4
+		JMP JOYST2
+JOYST1	LI R12,>0400		* RIGHT
+		COC R12,R13
+		JEQ JOYST2
+		LI R1,4
+JOYST2	LI R12,>0800		* DOWN
+		COC R12,R13
+		JEQ JOYST3
+		LI R2,-4
+		JMP JOYST4
+JOYST3	LI R12,>1000		* UP
+		COC R12,R13
+		JEQ JOYST4
+		LI R2,4
+JOYST4	B *R11
+
+* SGN		R0 IN IS VALUE, RETURNS -1,0,1 IN R0
+SGN		MOV R0,R0
+		JEQ SGN2
+		JLT	SGN1
+		MOV R8,R0	* LOADS 1 - LI R0,1
+		JMP SGN2
+SGN1	LI R0,-1
+SGN2	B *R11
+
+* SPRITE 0=SPRITE+1, 1=CHARACTER, 2=COLOR+1, 3=ROW+2, 4=COL+1
+SPRITE	MOV R11,R14
+		MOV R0,R12
+		DEC R12
+		SLA R12,2
+		AI R12,>0300
+		ORI R12,>4000
+		BL @WRADR
+		MOV R3,R12
+		DECT R12
+		SWPB R12
+		MOVB R12,@>8C00
+		MOV R4,R12
+		DEC R12
+		SWPB R12
+		MOVB R12,@>8C00
+		MOV R1,R12
+		SWPB R12
+		MOVB R12,@>8C00
+		MOV R2,R12
+		DEC R12
+		ANDI R12,>000F
+		SWPB R12
+		MOVB R12,@>8C00
+		B *R14
+
+* LOCATE 0=SPRITE+1, 1=ROW+2, 2=COL+1
+LOCATE	MOV R11,R14
+		MOV R0,R12
+		DEC R12
+		SLA R12,2
+		AI R12,>0300
+		ORI R12,>4000
+		BL @WRADR
+		MOV R1,R12
+		DECT R12			* TOP LINE IS -1, NOT 1
+		SWPB R12
+		MOVB R12,@>8C00
+		MOV R2,R12
+		DEC R12				* LEFT COL IS 0, NOT 1
+		SWPB R12
+		MOVB R12,@>8C00
+		B *R14
+
+* SOUND  0 - DURATION (INCL. NEGATIVE), 1 - PITCH (INCL. NEGATIVE), 2 - VOLUME
+* note: only one voice at a time, and tone or noise only
+SOUND	LI R12,>8000
+		MOV R0,R13
+		COC R12,R13			* NEGATIVE?
+		JNE SOUND1			* IF NO, GO WAIT
+		NEG R13				* MAKE POSITIVE
+		JMP SOUND3			* AND GO PLAY IT
+SOUND1	MOV @SNDDEL,R12
+		JEQ SOUND3
+SOUND2	MOV @>8802,R12		* VDP STATUS
+		ANDI R12,>8000
+		JEQ SOUND2
+		DEC @SNDDEL
+		JNE SOUND2
+SOUND3	CLR R12
+		LI R14,60
+		DIV R14,R12
+		MOV R12,@SNDDEL		* SAVE DURATION IN FRAMES
+		MOV R1,R14
+		JLT SOUND4			* NEGATIVE, PLAY NOISE
+		LI R12,>0001		* POSITIVE, PLAY TONE
+		LI R13,>B4F5		* 111861
+		DIV R14,R12
+		MOV R12,R13
+		ANDI R12,>000F
+		ORI R12,>0080
+		SWPB R12
+		MOVB R12,@>8400
+		SRL R13,4
+		SWPB R13
+		MOVB R13,@>8400
+		MOV R2,R12
+		ANDI R12,31
+		SRA R12,1
+		ORI R12,>0090
+		SWPB R12
+		MOVB R12,@>8400
+		LI R12,>FF00
+		MOVB R12,@>8400
+		JMP SOUND5
+SOUND4	INV R14
+		ANDI R14,>000F
+		ORI R14,>00E0
+		SWPB R14
+		MOVB R14,@>8400		* PLAY NOISE
+		MOV R2,R12
+		ANDI R12,31
+		SRA R12,1
+		ORI R12,>00F0
+		SWPB R12
+		MOVB R12,@>8400
+		LI R12,>9F00
+		MOVB R12,@>8400
+SOUND5	B *R11		
+
+* PATTERN 0 = SPRITE+1, 1=CHARACTER CODE
+PATTERN	MOV R11,R14
+		MOV R0,R12
+		DEC R12
+		SLA R12,2
+		AI R12,>0302
+		ORI R12,>4000
+		BL @WRADR
+		SWPB R1
+		MOVB R1,@>8C00
+		SWPB R1
+		B *R14
+		
+* SPCOLOR (SPRITE COLOR) 0=SPRITE+1, 1=COLOR+1
+SPCOLOR	MOV R11,R14
+		MOV R0,R12
+		DEC R12
+		SLA R12,2
+		AI R12,>0303
+		ORI R12,>4000
+		BL @WRADR
+		MOV R1,R12
+		DEC R12
+		ANDI R12,>000F
+		SWPB R12
+		MOVB R12,@>8C00
+		B *R14
+
+* SAVESCR (none) - Saves screen to temporary buffer
+SAVESCR	MOV R11,R14
+		LI R12,>437E		* so the first subtraction yields >0000
+		LI R10,768
+SAVES1	AI R12,->437E		* removes the offset, but adds 2
+		BL @WRADR
+		MOVB @>8800,R13
+		SWPB R13
+		MOVB @>8800,R13
+		AI R12,>4380		* offset to buffer, including the write mode bit
+		BL @WRADR
+		SWPB R13
+		MOVB R13,@>8C00
+		SWPB R13
+		MOVB R13,@>8C00
+		DECT R10
+		JNE SAVES1
+		B *R14
+		
+* RESTSCR (none) - restore the screen from the temporary buffer
+RESTSCR	MOV R11,R14
+		LI R12,>3FFE		* so the first addition yields >0380
+		LI R10,768
+RESTS1	AI R12,>C382		* - >4000 + >0382 
+		BL @WRADR
+		MOVB @>8800,R13
+		SWPB R13
+		MOVB @>8800,R13
+		AI R12,>3C80		* - >0380 + >4000 (write mode bit)
+		BL @WRADR
+		SWPB R13
+		MOVB R13,@>8C00
+		SWPB R13
+		MOVB R13,@>8C00
+		DECT R10
+		JNE RESTS1
+		B *R14
+
+* WAITKEY (none) - waits for any keypress then returns
+* note: uses r0,r1,r2, returns as per key
+WAITKEY	MOV R11,R9
+WAITK1	CLR R0
+		BL @KEY
+		C R2,R8	* COMPARE 1 - CI R2,1
+		JNE WAITK1
+		MOV R9,R11
+		B *R11
+
+* SNDDLY - R0 = delay in MS
+* uses sound sound to do a silent delay
+SNDDLY	MOV R11,R9
+		LI R2,30
+		BL @SOUND
+		MOV R8,R0	* LOADS 1 - LI R0,1
+		BL @SOUND
+		MOV R9,R11
+		B *R11
+		
+		END
